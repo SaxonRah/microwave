@@ -1,0 +1,23 @@
+{
+  "version": 3,
+  "configurePresets": [
+    { "name": "tests",  "displayName": "host tests (Debug, ASan+UBSan)",
+      "binaryDir": "${sourceDir}/../build-tests",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "u8",     "displayName": "legacy 8-bit sample regression",
+      "binaryDir": "${sourceDir}/../build-tests-u8",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "MW_TESTS_U8": "ON" } },
+    { "name": "narrow", "displayName": "DOS-style saturating mix path",
+      "binaryDir": "${sourceDir}/../build-tests-narrow",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "MW_TESTS_NARROW": "ON" } },
+    { "name": "bench",  "displayName": "benchmark (Release, no sanitizers)",
+      "binaryDir": "${sourceDir}/../build-bench",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "MW_TESTS_SANITIZE": "OFF" } }
+  ],
+  "buildPresets": [
+    { "name": "tests", "configurePreset": "tests" },
+    { "name": "u8", "configurePreset": "u8" },
+    { "name": "narrow", "configurePreset": "narrow" },
+    { "name": "bench", "configurePreset": "bench" }
+  ]
+}

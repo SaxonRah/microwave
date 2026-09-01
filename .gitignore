@@ -1,0 +1,27 @@
+# build output
+build-*/
+GAME.MWP
+*.o
+*.a
+*.exe
+*.uf2
+*.elf
+*.bin
+*.map
+
+# DOS toolchain leftovers
+*.obj
+*.err
+*.lk1
+*.mk1
+
+# editors and platforms
+.vscode/
+.idea/
+.DS_Store
+__pycache__/
+*.pyc
+
+# rendered audio from the headless frontend
+*.wav.out
+demo.wav
