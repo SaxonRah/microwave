@@ -1,5 +1,5 @@
 @echo off
-rem Remove every build output. Sources and assets are never touched.
+rem Remove every generated build directory. Sources and assets are untouched.
 setlocal EnableExtensions
 set "MW_ROOT=%~dp0.."
 pushd "%MW_ROOT%"
@@ -11,7 +11,14 @@ for %%D in (build-tests build-tests-u8 build-tests-narrow build-bench build-head
     )
 )
 
-if exist "GAME.MWP" ( echo   removing GAME.MWP & del /q "GAME.MWP" )
+for %%D in (build build-max98357a build-pcm5102a build-ns4168) do (
+    if exist "microwave\%%D" (
+        echo   removing microwave\%%D
+        rmdir /s /q "microwave\%%D"
+    )
+)
+
+if exist "GAME.MWP" (echo   removing GAME.MWP& del /q "GAME.MWP")
 
 echo clean.
 popd

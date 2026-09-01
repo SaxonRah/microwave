@@ -1,0 +1,64 @@
+;
+; MicroWave RP2350 I2S transmitter.
+;
+; Derived from Raspberry Pi's pico-extras audio_i2s.pio (BSD-3-Clause).
+; The transport is deliberately device-agnostic: MAX98357A, PCM5102A and
+; NS4168 all consume standard three-wire I2S (BCLK, LRCLK, DATA).
+;
+; 16-bit stereo slots, MSB first, standard I2S one-bit data delay.
+; FIFO word layout:
+;
+;   31             16 15              0
+;  +----------------+------------------+
+;  | left sample     | right sample     |
+;  +----------------+------------------+
+;
+; BCLK must be the first side-set pin and LRCLK must be BCLK + 1.
+; Autopull is enabled at 32 bits and the OSR shifts left (MSB first).
+;
+
+.program mw_i2s
+.side_set 2
+
+                    ;        /--- LRCLK
+                    ;        |/-- BCLK
+bitloop1:           ;        ||
+    out pins, 1       side 0b10
+    jmp x-- bitloop1  side 0b11
+    out pins, 1       side 0b00
+    set x, 14         side 0b01
+
+bitloop0:
+    out pins, 1       side 0b00
+    jmp x-- bitloop0  side 0b01
+    out pins, 1       side 0b10
+public entry_point:
+    set x, 14         side 0b11
+
+% c-sdk {
+
+static inline void mw_i2s_program_init(PIO pio, uint sm, uint offset,
+                                       uint data_pin, uint clock_pin_base) {
+    pio_sm_config c = mw_i2s_program_get_default_config(offset);
+
+    sm_config_set_out_pins(&c, data_pin, 1);
+    sm_config_set_sideset_pins(&c, clock_pin_base);
+    sm_config_set_out_shift(&c, false, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_sm_init(pio, sm, offset, &c);
+
+#if PICO_PIO_USE_GPIO_BASE
+    uint64_t pin_mask = (1ull << data_pin) | (3ull << clock_pin_base);
+    pio_sm_set_pindirs_with_mask64(pio, sm, pin_mask, pin_mask);
+#else
+    uint32_t pin_mask = (1u << data_pin) | (3u << clock_pin_base);
+    pio_sm_set_pindirs_with_mask(pio, sm, pin_mask, pin_mask);
+#endif
+
+    pio_sm_set_pins(pio, sm, 0);
+    pio_sm_exec(pio, sm,
+                pio_encode_jmp(offset + mw_i2s_offset_entry_point));
+}
+
+%}

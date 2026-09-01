@@ -1,0 +1,57 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "max98357a",
+      "displayName": "Pico 2: MAX98357A I2S amplifier",
+      "description": "32 kHz, 16-bit stereo I2S; mono mix duplicated to both slots.",
+      "binaryDir": "${sourceDir}/build-max98357a",
+      "cacheVariables": {
+        "MW_PICO_DEVICE": "MAX98357A",
+        "MW_PICO_RATE": "32000"
+      },
+      "generator": "Ninja"
+    },
+    {
+      "name": "pcm5102a",
+      "displayName": "Pico 2: PCM5102A I2S DAC",
+      "description": "32 kHz three-wire I2S, using the PCM5102A BCK PLL with SCK absent/grounded.",
+      "binaryDir": "${sourceDir}/build-pcm5102a",
+      "cacheVariables": {
+        "MW_PICO_DEVICE": "PCM5102A",
+        "MW_PICO_RATE": "32000"
+      },
+      "generator": "Ninja"
+    },
+    {
+      "name": "ns4168",
+      "displayName": "Pico 2: NS4168 I2S amplifier",
+      "description": "32 kHz standard I2S; mono mix duplicated to both slots.",
+      "binaryDir": "${sourceDir}/build-ns4168",
+      "cacheVariables": {
+        "MW_PICO_DEVICE": "NS4168",
+        "MW_PICO_RATE": "32000"
+      },
+      "generator": "Ninja"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "max98357a",
+      "configurePreset": "max98357a"
+    },
+    {
+      "name": "pcm5102a",
+      "configurePreset": "pcm5102a"
+    },
+    {
+      "name": "ns4168",
+      "configurePreset": "ns4168"
+    }
+  ]
+}

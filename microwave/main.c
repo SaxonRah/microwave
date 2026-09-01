@@ -1,31 +1,18 @@
-/* MicroWave RP2350 frontend: DMA-fed audio out.
+/* MicroWave RP2350 frontend: PIO + DMA three-wire I2S audio.
  *
- * Build via the repository's mw.bat:  .\mw.bat build pico
+ * The shared mixer still owns every sample. This file is only the presentation
+ * layer, exactly as the Pico frontend in MicroRender only presents finished
+ * RGB565 tiles. Two S16 mix buffers are alternated while DMA drains the other.
  *
- * This is the target the pipelined render path was designed for. The pattern
- * is exactly the one MicroRender uses to feed an ILI9341 over SPI:
+ * Supported sinks share the same standard I2S transport:
+ *   MAX98357A  - mono Class-D I2S amplifier
+ *   PCM5102A   - stereo DAC, used in 3-wire/BCK-PLL mode (no MCLK required)
+ *   NS4168     - mono Class-D I2S amplifier
  *
- *   - two buffers
- *   - hand one to DMA, mix into the other
- *   - block only when the DMA has not finished and there is nothing else to do
- *
- * snd_render_blocked_pipelined() expresses that directly, given a drain_begin
- * that starts a transfer and a drain_wait that blocks until it completes. The
- * mixer never allocates, never blocks on its own behalf, and never knows what
- * a DMA channel is.
- *
- * HONESTY NOTE
- *
- * As with the DOS frontend, the mixer here is the tested one and the hardware
- * bringup is not. This compiles against the Pico SDK and follows the documented
- * PWM and DMA sequences, but it has not been run on silicon in this
- * repository's CI, which has no silicon. The audio path it feeds is verified;
- * the pins are your problem.
- *
- * Two output modes:
- *   MW_PICO_PWM  (default) 8-bit PWM on a single GPIO, one RC filter away from
- *                a speaker. No extra hardware.
- *   MW_PICO_I2S            16-bit stereo I2S via PIO, for an external DAC.
+ * The mono MicroWave mix is duplicated into both left and right I2S slots.
+ * That deliberately makes the channel-select pins on MAX98357A and NS4168
+ * irrelevant to the demo audio: either selected channel contains the same
+ * signal. PCM5102A produces the same signal on both analog outputs.
  */
 
 #include "mw_music_demo.h"
@@ -33,122 +20,232 @@
 
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
-#include "hardware/irq.h"
-#include "hardware/pwm.h"
+#include "hardware/pio.h"
+#include "mw_i2s.pio.h"
 #include "pico/stdlib.h"
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
-#ifndef MW_PICO_PWM
-#define MW_PICO_PWM 1
+#ifndef MW_PICO_DEVICE
+#define MW_PICO_DEVICE 1
+#endif
+#ifndef MW_PICO_RATE
+#define MW_PICO_RATE 32000
+#endif
+#ifndef MW_PICO_BLOCK
+#define MW_PICO_BLOCK 256
+#endif
+#ifndef MW_PICO_SYS_KHZ
+#define MW_PICO_SYS_KHZ 0
+#endif
+#ifndef MW_I2S_PIN_BCLK
+#define MW_I2S_PIN_BCLK 10
+#endif
+#ifndef MW_I2S_PIN_LRCLK
+#define MW_I2S_PIN_LRCLK 11
+#endif
+#ifndef MW_I2S_PIN_DATA
+#define MW_I2S_PIN_DATA 12
+#endif
+#ifndef MW_I2S_PIO
+#define MW_I2S_PIO 0
+#endif
+#ifndef MW_I2S_SM
+#define MW_I2S_SM 0
+#endif
+#ifndef MW_I2S_DMA
+#define MW_I2S_DMA 0
+#endif
+#ifndef MW_PICO_SERIAL
+#define MW_PICO_SERIAL 1
 #endif
 
-#define MW_RATE 22050
-#define MW_BLOCK 256
-#define MW_AUDIO_PIN 18
+#if MW_I2S_PIN_LRCLK != (MW_I2S_PIN_BCLK + 1)
+#error "MW_I2S_PIN_LRCLK must equal MW_I2S_PIN_BCLK + 1"
+#endif
 
-/* Two mix buffers, so the mixer can work on one while DMA drains the other.
-   These are the only audio buffers in the program; the mixer has none. */
-static snd_sample_t g_block_a[MW_BLOCK];
-static snd_sample_t g_block_b[MW_BLOCK];
+static snd_sample_t g_block_a[MW_PICO_BLOCK];
+static snd_sample_t g_block_b[MW_PICO_BLOCK];
+static uint32_t g_i2s_a[MW_PICO_BLOCK];
+static uint32_t g_i2s_b[MW_PICO_BLOCK];
 
-/* PWM wants unsigned 8-bit levels, so each mix buffer needs a converted twin.
-   The conversion happens in drain_begin, which is this target's equivalent of
-   MicroRender's "convert during presentation" rule. */
-static uint8_t g_pwm_a[MW_BLOCK];
-static uint8_t g_pwm_b[MW_BLOCK];
+#if MW_I2S_PIO == 1
+#define MW_AUDIO_PIO pio1
+#define MW_AUDIO_GPIO_FUNC GPIO_FUNC_PIO1
+#define MW_AUDIO_DREQ_BASE DREQ_PIO1_TX0
+#else
+#define MW_AUDIO_PIO pio0
+#define MW_AUDIO_GPIO_FUNC GPIO_FUNC_PIO0
+#define MW_AUDIO_DREQ_BASE DREQ_PIO0_TX0
+#endif
 
-static int g_dma_chan = -1;
-static volatile int g_dma_busy = 0;
-static uint g_pwm_slice = 0;
+static PIO g_pio = MW_AUDIO_PIO;
+static uint g_sm = MW_I2S_SM;
+static int g_dma_chan = MW_I2S_DMA;
 static mw_demo_t g_demo;
 
-static void dma_done_isr(void) {
-  dma_hw->ints0 = 1u << (unsigned)g_dma_chan;
-  g_dma_busy = 0;
+static const char *mw_device_name(void) {
+#if MW_PICO_DEVICE == 1
+  return "MAX98357A";
+#elif MW_PICO_DEVICE == 2
+  return "PCM5102A";
+#elif MW_PICO_DEVICE == 3
+  return "NS4168";
+#else
+  return "UNKNOWN";
+#endif
+}
+
+#if MW_PICO_SERIAL
+static char g_cmd[32];
+static unsigned g_cmd_n = 0;
+
+static void mw_service_stdio(void) {
+  int ch;
+  while ((ch = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+    if (ch == '\r' || ch == '\n') {
+      if (g_cmd_n != 0) {
+        g_cmd[g_cmd_n] = '\0';
+        if (strcmp(g_cmd, "PING") == 0) {
+          printf("MWPICO1 device=%s rate=%d bclk=%d lrclk=%d data=%d\n",
+                 mw_device_name(), MW_PICO_RATE, MW_I2S_PIN_BCLK,
+                 MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA);
+          fflush(stdout);
+        }
+        g_cmd_n = 0;
+      }
+    } else if (g_cmd_n + 1u < sizeof(g_cmd)) {
+      g_cmd[g_cmd_n++] = (char)ch;
+    } else {
+      g_cmd_n = 0;
+    }
+  }
+}
+#else
+static void mw_service_stdio(void) {}
+#endif
+
+static int16_t mw_sample_to_s16(snd_sample_t s) {
+#if SND_SAMPLE_FORMAT == SND_SAMPLE_FORMAT_U8
+  return (int16_t)(((int)s - 128) << 8);
+#else
+  return (int16_t)s;
+#endif
 }
 
 static void audio_hw_init(void) {
-  gpio_set_function(MW_AUDIO_PIN, GPIO_FUNC_PWM);
-  g_pwm_slice = pwm_gpio_to_slice_num(MW_AUDIO_PIN);
+  uint offset;
+  uint32_t sys_hz;
+  uint32_t div256;
+  dma_channel_config dc;
 
-  /* 8-bit PWM carrier well above the audio band. */
-  pwm_config cfg = pwm_get_default_config();
-  pwm_config_set_wrap(&cfg, 255);
-  pwm_config_set_clkdiv(&cfg, 1.0f);
-  pwm_init(g_pwm_slice, &cfg, true);
+#if MW_PICO_SYS_KHZ > 0
+  if (!set_sys_clock_khz(MW_PICO_SYS_KHZ, false))
+    panic("MicroWave: could not set requested system clock");
+#endif
 
-  g_dma_chan = dma_claim_unused_channel(true);
+  pio_sm_claim(g_pio, g_sm);
+  dma_channel_claim((uint)g_dma_chan);
 
-  irq_set_exclusive_handler(DMA_IRQ_0, dma_done_isr);
-  dma_channel_set_irq0_enabled((uint)g_dma_chan, true);
-  irq_set_enabled(DMA_IRQ_0, true);
+  gpio_set_function(MW_I2S_PIN_DATA, MW_AUDIO_GPIO_FUNC);
+  gpio_set_function(MW_I2S_PIN_BCLK, MW_AUDIO_GPIO_FUNC);
+  gpio_set_function(MW_I2S_PIN_LRCLK, MW_AUDIO_GPIO_FUNC);
+
+  if (!pio_can_add_program(g_pio, &mw_i2s_program))
+    panic("MicroWave: no room for I2S PIO program");
+  offset = pio_add_program(g_pio, &mw_i2s_program);
+  mw_i2s_program_init(g_pio, g_sm, offset,
+                      MW_I2S_PIN_DATA, MW_I2S_PIN_BCLK);
+
+  /* The PIO program executes 64 instructions per stereo frame: two PIO
+     instructions for each of 32 transmitted bits. The SDK divider register is
+     16.8 fixed point, so divider*256 = clk_sys*4/sample_rate. This is the same
+     calculation used by Raspberry Pi's pico_audio_i2s backend. */
+  sys_hz = clock_get_hz(clk_sys);
+  div256 = (uint32_t)((((uint64_t)sys_hz * 4u) + MW_PICO_RATE / 2u) /
+                      (uint32_t)MW_PICO_RATE);
+  if ((div256 >> 8u) == 0u || (div256 >> 8u) > 0xFFFFu)
+    panic("MicroWave: I2S PIO clock divider is out of range");
+  pio_sm_set_clkdiv_int_frac(g_pio, g_sm,
+                             (uint16_t)(div256 >> 8u),
+                             (uint8_t)(div256 & 0xFFu));
+
+  dc = dma_channel_get_default_config((uint)g_dma_chan);
+  channel_config_set_transfer_data_size(&dc, DMA_SIZE_32);
+  channel_config_set_read_increment(&dc, true);
+  channel_config_set_write_increment(&dc, false);
+  channel_config_set_dreq(&dc, MW_AUDIO_DREQ_BASE + g_sm);
+  dma_channel_configure((uint)g_dma_chan, &dc,
+                        &g_pio->txf[g_sm], NULL, 0, false);
+
+  pio_sm_set_enabled(g_pio, g_sm, true);
 }
 
-/* Start a transfer and return immediately. The mixer will call drain_wait
-   before it reuses this buffer, and not before, which is what makes the
-   overlap safe. */
 static void mw_drain_begin(snd_mixer_t *m, long frame, int frames,
                            const snd_sample_t *samples, void *user) {
-  uint8_t *dst;
+  uint32_t *dst = (m->block == g_block_a) ? g_i2s_a : g_i2s_b;
+  int i;
 
   (void)frame;
   (void)user;
 
-  /* Pick the converted buffer that belongs to whichever mix buffer this is. */
-  dst = (samples == g_block_a) ? g_pwm_a : g_pwm_b;
-
-  if (!samples) {
-    /* Nothing touched this block. Emitting midscale is both correct and the
-       cheapest thing available. */
-    memset(dst, 0x80, (size_t)frames);
-  } else {
-    snd_pack_u8(samples, dst, (long)frames * (long)m->channels);
+  for (i = 0; i < frames; ++i) {
+    int16_t left = 0;
+    int16_t right = 0;
+    if (samples) {
+      if (m->channels == 2) {
+        left = mw_sample_to_s16(samples[i * 2]);
+        right = mw_sample_to_s16(samples[i * 2 + 1]);
+      } else {
+        left = mw_sample_to_s16(samples[i]);
+        right = left;
+      }
+    }
+    dst[i] = ((uint32_t)(uint16_t)left << 16) | (uint16_t)right;
   }
 
-  g_dma_busy = 1;
-  dma_channel_config c = dma_channel_get_default_config((uint)g_dma_chan);
-  channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
-  channel_config_set_read_increment(&c, true);
-  channel_config_set_write_increment(&c, false);
-  channel_config_set_dreq(&c, DREQ_PWM_WRAP0 + g_pwm_slice);
-
-  dma_channel_configure((uint)g_dma_chan, &c,
-                        &pwm_hw->slice[g_pwm_slice].cc, /* write address */
-                        dst,                            /* read address  */
-                        (uint)frames, true);
+  dma_channel_set_read_addr((uint)g_dma_chan, dst, false);
+  dma_channel_set_trans_count((uint)g_dma_chan, (uint32_t)frames, true);
 }
 
-/* Block until the previous transfer has finished. Called by the pipelined
-   render loop only after the next block has already been mixed, so on a fast
-   enough core this returns immediately and the mixer never stalls. */
 static void mw_drain_wait(snd_mixer_t *m, void *user) {
   (void)m;
   (void)user;
-  while (g_dma_busy)
+  while (dma_channel_is_busy((uint)g_dma_chan)) {
+    mw_service_stdio();
     tight_loop_contents();
+  }
+  mw_service_stdio();
 }
 
 int main(void) {
   snd_mixer_t mixer;
 
-  stdio_init_all();
   audio_hw_init();
+#if MW_PICO_SERIAL
+  stdio_init_all();
+  printf("MicroWave Pico I2S: %s, %d Hz, BCLK GP%d, LRCLK GP%d, DATA GP%d\n",
+         mw_device_name(), MW_PICO_RATE, MW_I2S_PIN_BCLK,
+         MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA);
+  printf("MWPICO1 ready\n");
+#endif
 
-  snd_init(&mixer, MW_RATE, 1, g_block_a, MW_BLOCK, NULL, NULL);
+  snd_init(&mixer, MW_PICO_RATE, 1, g_block_a, MW_PICO_BLOCK, NULL, NULL);
   snd_set_async_drain(&mixer, mw_drain_begin, mw_drain_wait);
   snd_set_master_gain(&mixer, SND_GAIN_UNITY);
 
   for (;;) {
     mw_demo_init(&g_demo, &mixer, 0, 0);
-
-    /* One call renders the whole song, overlapping every DMA transfer with the
-       mix of the next block. There is no audio thread, no ring buffer and no
-       lock: the device's appetite drives the loop. */
     snd_render_blocked_pipelined(&mixer, g_block_b,
                                  mw_demo_length_frames(&g_demo, &mixer),
-                                 mw_demo_mix, &g_demo, SND_RENDER_SKIP_SILENT);
-
-    sleep_ms(1000);
+                                 mw_demo_mix, &g_demo,
+                                 SND_RENDER_SKIP_SILENT);
+    /* Restart immediately. Keeping BCLK/LRCLK gaps short matters for 3-wire
+       DACs such as PCM5102A, whose internal PLL derives its system clock from
+       the incoming bit clock. */
+    mw_service_stdio();
   }
 }
