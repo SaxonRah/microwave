@@ -87,7 +87,7 @@ pushd "%MW_ROOT%\tests"
 cmake --preset %PRESET% || (popd & endlocal & exit /b 1)
 cmake --build --preset %PRESET% || (popd & endlocal & exit /b 1)
 popd
-ctest --test-dir "%MW_ROOT%\%DIR%" --output-on-failure || (endlocal & exit /b 1)
+ctest --test-dir "%MW_ROOT%\%DIR%" -C Debug --output-on-failure || (endlocal & exit /b 1)
 endlocal & exit /b 0
 
 :do_bench
