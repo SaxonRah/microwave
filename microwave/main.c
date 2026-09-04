@@ -99,9 +99,35 @@ static const char *mw_device_name(void) {
 #endif
 }
 
+/* The serial command handler adjusts volume, so it needs the mixer. It is a
+   pointer rather than a copy because mw_drain_wait() runs between blocks, and
+   a volume set there must land on the mixer the render loop is using. */
+static snd_mixer_t *g_mixer = NULL;
+
 #if MW_PICO_SERIAL
 static char g_cmd[32];
 static unsigned g_cmd_n = 0;
+
+/* "VOL 60" -> 60. Returns -1 when the line is not a volume command. */
+static int mw_parse_vol(const char *cmd) {
+  int v = 0;
+  const char *p = cmd;
+
+  if (strncmp(p, "VOL", 3) != 0)
+    return -1;
+  p += 3;
+  while (*p == ' ')
+    ++p;
+  if (*p < '0' || *p > '9')
+    return -1;
+  while (*p >= '0' && *p <= '9') {
+    v = v * 10 + (*p - '0');
+    if (v > 100)
+      return 100;
+    ++p;
+  }
+  return v;
+}
 
 static void mw_service_stdio(void) {
   int ch;
@@ -110,10 +136,22 @@ static void mw_service_stdio(void) {
       if (g_cmd_n != 0) {
         g_cmd[g_cmd_n] = '\0';
         if (strcmp(g_cmd, "PING") == 0) {
-          printf("MWPICO1 device=%s rate=%d bclk=%d lrclk=%d data=%d\n",
+          printf("MWPICO1 device=%s rate=%d bclk=%d lrclk=%d data=%d vol=%d\n",
                  mw_device_name(), MW_PICO_RATE, MW_I2S_PIN_BCLK,
-                 MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA);
+                 MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA,
+                 snd_vol_to_percent(snd_master_volume(g_mixer)));
           fflush(stdout);
+        } else {
+          /* Volume is the one control this board has, since there are no
+             buttons wired. It is serviced from mw_drain_wait(), so it takes
+             effect on the next block rather than at the end of the song --
+             about 6 ms at the default block size. */
+          int v = mw_parse_vol(g_cmd);
+          if (v >= 0 && g_mixer) {
+            snd_set_master_volume(g_mixer, snd_vol_from_percent(v));
+            printf("MWPICO1 vol=%d\n", v);
+            fflush(stdout);
+          }
         }
         g_cmd_n = 0;
       }
@@ -235,7 +273,12 @@ int main(void) {
 
   snd_init(&mixer, MW_PICO_RATE, 1, g_block_a, MW_PICO_BLOCK, NULL, NULL);
   snd_set_async_drain(&mixer, mw_drain_begin, mw_drain_wait);
-  snd_set_master_gain(&mixer, SND_GAIN_UNITY);
+  g_mixer = &mixer;
+  /* Ramped, because a VOL command arriving between two blocks would otherwise
+     be a step discontinuity straight into the DAC. 512 frames is about 23 ms
+     at 22050 Hz. */
+  snd_set_master_volume_now(&mixer, SND_VOL_UNITY);
+  snd_set_volume_ramp(&mixer, 512);
 
   for (;;) {
     mw_demo_init(&g_demo, &mixer, 0, 0);
