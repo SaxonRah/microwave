@@ -17,6 +17,14 @@
  *      while the card plays the other. That is snd_render_blocked_pipelined's
  *      contract, expressed in 8237 registers.
  *
+ * Volume needs nothing target-specific at all. It is an output-stage gain in
+ * the mixer, applied before snd_pack_u8() ever runs, so the same control that
+ * works on the desktop works here. A Sound Blaster's own mixer chip would
+ * attenuate after the DAC and preserve more of the 256 output codes, but that
+ * means CT1335/CT1345/CT1745 register layouts selected off the DSP version --
+ * a few hundred lines of untestable port I/O for a demo. The software gain
+ * costs one multiply per sample at 11025 Hz, which a 386 will not notice.
+ *
  * HONESTY NOTE
  *
  * The mixer in this repository is tested exhaustively on the host. The port
@@ -235,9 +243,18 @@ int main(int argc, char **argv) {
   snd_mixer_t mixer;
   long total, done = 0;
   int seconds = 0;
+  int volume = 100;
 
+  /* MWDEMO.EXE [seconds] [volume 0..100] */
   if (argc > 1)
     seconds = atoi(argv[1]);
+  if (argc > 2) {
+    volume = atoi(argv[2]);
+    if (volume < 0)
+      volume = 0;
+    if (volume > 100)
+      volume = 100;
+  }
 
   printf("MicroWave DOS frontend\n");
   parse_blaster();
@@ -255,7 +272,11 @@ int main(int argc, char **argv) {
   }
 
   snd_init(&mixer, MW_RATE, 1, g_block, MW_BLOCK, mw_drain_dos, NULL);
-  snd_set_master_gain(&mixer, SND_GAIN_UNITY);
+  /* A short ramp so the +/- keys do not put a step discontinuity into the DMA
+     buffer. 110 frames is 10 ms at 11025 Hz, and the ramp arithmetic only runs
+     while the volume is actually moving. */
+  snd_set_volume_ramp(&mixer, MW_RATE / 100);
+  snd_set_master_volume_now(&mixer, snd_vol_from_percent(volume));
   mw_demo_init(&g_demo, &mixer, 0, 1);
 
   total = seconds > 0 ? (long)seconds * MW_RATE
@@ -271,18 +292,32 @@ int main(int argc, char **argv) {
   dma_program();
   dsp_start_autoinit();
 
-  printf("playing; press any key to stop\n");
+  printf("playing at %d%%; +/- adjust volume, any other key stops\n", volume);
 
   /* Polled rather than interrupt-driven. An IRQ handler is the right answer
      for a game; polling keeps this file readable and is adequate for a demo,
      because the mixer runs hundreds of times faster than realtime. */
-  while (done < total && !kbhit()) {
+  while (done < total) {
     /* Follow the 8237 current-address register to see which half is playing.
        This is the poll an IRQ handler would replace. */
     unsigned ch = g_dma & 3u;
     unsigned lo, hi;
     unsigned long remaining;
     int half;
+
+    if (kbhit()) {
+      int key = getch();
+      if (key == '+' || key == '=') {
+        volume = (volume + 5 > 100) ? 100 : volume + 5;
+      } else if (key == '-' || key == '_') {
+        volume = (volume < 5) ? 0 : volume - 5;
+      } else {
+        break;
+      }
+      snd_set_master_volume(&mixer, snd_vol_from_percent(volume));
+      printf("\rvolume %3d%%  ", volume);
+      fflush(stdout);
+    }
 
     outp(0x0Cu, 0);
     lo = (unsigned)inp((int)((ch << 1) + 1u));
@@ -299,10 +334,10 @@ int main(int argc, char **argv) {
   }
 
   dsp_stop();
-  if (kbhit())
+  while (kbhit())
     (void)getch();
   free(g_dma_raw);
 
-  printf("done: %ld frames\n", done);
+  printf("\ndone: %ld frames\n", done);
   return 0;
 }
