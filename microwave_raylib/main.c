@@ -137,6 +137,7 @@ static void usage(const char *argv0) {
   printf("  --entry NAME    pack entry to use as the effect (default "
          "\"pickup\")\n");
   printf("  --wav PATH      also write the mix to a RIFF WAV file\n");
+  printf("  --volume N      initial volume, 0..100 (default 100)\n");
   printf("  --help          this text\n");
 }
 
@@ -214,6 +215,10 @@ int main(int argc, char **argv) {
   const char *entry = "pickup";
   const char *wav_path = NULL;
   double seconds = -1.0;
+  int volume_pct = 100;
+#if !MW_HEADLESS
+  int muted = 0; /* only the interactive build has a key to toggle it */
+#endif
   long total_frames;
   int i;
 
@@ -231,6 +236,12 @@ int main(int argc, char **argv) {
       entry = argv[++i];
     } else if (strcmp(argv[i], "--wav") == 0 && i + 1 < argc) {
       wav_path = argv[++i];
+    } else if (strcmp(argv[i], "--volume") == 0 && i + 1 < argc) {
+      volume_pct = atoi(argv[++i]);
+      if (volume_pct < 0)
+        volume_pct = 0;
+      if (volume_pct > 100)
+        volume_pct = 100;
     } else {
       printf("unknown argument: %s\n\n", argv[i]);
       usage(argv[0]);
@@ -245,7 +256,12 @@ int main(int argc, char **argv) {
 #if SND_WIDE_ACCUM
   snd_set_accumulator(&mixer, g_accum);
 #endif
-  snd_set_master_gain(&mixer, SND_GAIN_UNITY);
+  /* The volume applies to the WAV as well as to the device, because it is an
+     output-stage gain in the mixer rather than something the audio backend
+     does on the way out. Rendering headless at --volume 50 gives a file that
+     is 6 dB down, which is the point of putting it in the DSP path. */
+  snd_set_master_volume_now(&mixer, snd_vol_from_percent(volume_pct));
+  snd_set_volume_ramp(&mixer, MW_RATE / 50); /* 20 ms, no clicks while dragging */
 
   mw_demo_init(&app.demo, &mixer, 0, 0);
 
@@ -298,16 +314,50 @@ int main(int argc, char **argv) {
       mw_demo_trigger_sfx(&app.demo, &mixer, &g_sfx_clip,
                           app.frames_produced + MW_BLOCK);
 
+    /* Volume. Held keys repeat, and snd_set_master_volume() ramps, so holding
+       a key sweeps smoothly instead of stepping. The mixer owns the target, so
+       there is no shadow copy here that can drift out of sync with it. */
+    if (IsKeyDown(KEY_MINUS) || IsKeyDown(KEY_KP_SUBTRACT)) {
+      volume_pct = snd_vol_to_percent(snd_master_volume(&mixer)) - 1;
+      if (volume_pct < 0)
+        volume_pct = 0;
+      snd_set_master_volume(&mixer, snd_vol_from_percent(volume_pct));
+      muted = 0;
+    }
+    if (IsKeyDown(KEY_EQUAL) || IsKeyDown(KEY_KP_ADD)) {
+      volume_pct = snd_vol_to_percent(snd_master_volume(&mixer)) + 1;
+      if (volume_pct > 100)
+        volume_pct = 100;
+      snd_set_master_volume(&mixer, snd_vol_from_percent(volume_pct));
+      muted = 0;
+    }
+    if (IsKeyPressed(KEY_M)) {
+      muted = !muted;
+      snd_set_master_volume(
+          &mixer, muted ? SND_VOL_SILENT : snd_vol_from_percent(volume_pct));
+    }
+
     BeginDrawing();
     ClearBackground((Color){18, 18, 24, 255});
     DrawText("MicroWave", 20, 24, 40, (Color){235, 235, 245, 255});
-    DrawText(g_have_sfx ? "SPACE: pack sound effect"
-                        : "no pack loaded; song only",
+    DrawText(g_have_sfx ? "SPACE: effect   -/+: volume   M: mute"
+                        : "no pack loaded   -/+: volume   M: mute",
              20, 80, 20, (Color){150, 150, 170, 255});
     DrawText(TextFormat("%.1f / %.1f s",
                         (double)app.frames_produced / (double)MW_RATE,
                         (double)total_frames / (double)MW_RATE),
              20, 120, 20, (Color){150, 150, 170, 255});
+    {
+      /* Show the target, not the ramping value: a readout that chases the ramp
+         looks broken even though it is telling the truth. */
+      int shown = snd_vol_to_percent(snd_master_volume(&mixer));
+      DrawText(TextFormat(muted ? "volume %d%% (muted)" : "volume %d%%", shown),
+               20, 150, 20, (Color){150, 150, 170, 255});
+      DrawRectangle(200, 156, 200, 8, (Color){40, 40, 52, 255});
+      DrawRectangle(200, 156, 2 * shown, 8,
+                    muted ? (Color){90, 90, 110, 255}
+                          : (Color){120, 200, 160, 255});
+    }
     EndDrawing();
   }
 
