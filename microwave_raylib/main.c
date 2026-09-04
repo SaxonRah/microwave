@@ -259,7 +259,7 @@ int main(int argc, char **argv) {
   /* The volume applies to the WAV as well as to the device, because it is an
      output-stage gain in the mixer rather than something the audio backend
      does on the way out. Rendering headless at --volume 50 gives a file that
-     is 6 dB down, which is the point of putting it in the DSP path. */
+     is about 12 dB down, which is the point of putting it in the DSP path. */
   snd_set_master_volume_now(&mixer, snd_vol_from_percent(volume_pct));
   snd_set_volume_ramp(&mixer, MW_RATE / 50); /* 20 ms, no clicks while dragging */
 
@@ -292,6 +292,10 @@ int main(int argc, char **argv) {
 #else
   InitWindow(480, 200, "MicroWave");
   InitAudioDevice();
+
+  /* Raylib treats this value as the size of ONE streaming sub-buffer and
+     internally allocates two of them. UpdateAudioStream() fills one sub-buffer
+     at a time, so the requested sub-buffer size must match one MicroWave block. */
   SetAudioStreamBufferSizeDefault(MW_BLOCK);
   app.stream = LoadAudioStream(MW_RATE, 32, MW_CHANNELS);
   PlayAudioStream(app.stream);

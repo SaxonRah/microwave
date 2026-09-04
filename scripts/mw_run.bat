@@ -40,12 +40,49 @@ if not defined HOST_EXE (
     exit /b 1
 )
 set "MW_FORWARD_ARGS="
-:r_host_args
-if "%~1"=="" goto r_host_launch
-set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
-shift /1
-goto r_host_args
-:r_host_launch
+
+rem Collect the host frontend arguments without a GOTO loop.  The old loop
+rem could fail to resolve :r_host_args under cmd.exe when this worker itself
+rem was CALLed from mw.bat.  Ten arguments covers every currently supported
+rem Raylib option/value pair at once.
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" (
+    set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+    shift /1
+)
+if not "%~1"=="" set "MW_FORWARD_ARGS=!MW_FORWARD_ARGS! "%~1""
+
 echo Running !HOST_EXE!
 "!HOST_EXE!" !MW_FORWARD_ARGS!
 exit /b %ERRORLEVEL%
@@ -83,5 +120,5 @@ if not exist "build-dos\MWDEMO.EXE" (
 call "%MW_ROOT%\scripts\mw_tools.bat" dosbox
 if errorlevel 1 exit /b 1
 if "%MW_DOSBOX_CYCLES%"=="" set "MW_DOSBOX_CYCLES=max"
-"%MW_DOSBOX%" -c "config -set cpu cycles=%MW_DOSBOX_CYCLES%" -c "mount c build-dos" -c "c:" -c "set BLASTER=A220 I7 D1" -c "MWDEMO.EXE %1" -c "exit"
+"%MW_DOSBOX%" -c "config -set cpu cycles=%MW_DOSBOX_CYCLES%" -c "mount c build-dos" -c "c:" -c "set BLASTER=A220 I7 D1" -c "MWDEMO.EXE %1 %2" -c "exit"
 exit /b %ERRORLEVEL%
