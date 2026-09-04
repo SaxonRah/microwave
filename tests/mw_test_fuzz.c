@@ -158,6 +158,20 @@ static void build_scene(fscene_t *sc, mwt_rng_t *rng, const snd_mixer_t *m) {
   }
 }
 
+/* The master volume the fuzzer will drive, derived from the seed so that two
+   renders of the same seed at different block sizes get the same control
+   settings. The volume and the ramp length are part of the scene, exactly like
+   a voice's pitch: if either one leaked block-size dependence into the output,
+   the two renders would diverge and the harness would say so. */
+static void apply_fuzz_volume(snd_mixer_t *m, unsigned long long seed) {
+  int pct = (int)((seed >> 41) % 101u);
+  int ramp = (int)((seed >> 49) % 4096u);
+
+  snd_set_master_volume_now(m, SND_VOL_UNITY);
+  snd_set_volume_ramp(m, ramp); /* 0 a sixteenth of the time: no ramp at all */
+  snd_set_master_volume(m, snd_vol_from_percent(pct));
+}
+
 static void render(mwt_sink_t *sink, int block_frames, int channels,
                    unsigned long long seed, unsigned flags, int pipelined) {
   snd_mixer_t m;
@@ -166,7 +180,7 @@ static void render(mwt_sink_t *sink, int block_frames, int channels,
 
   mwt_sink_reset(sink);
   snd_init(&m, RATE, channels, g_block, block_frames, mwt_sink_drain, sink);
-  snd_set_master_gain(&m, SND_GAIN_UNITY);
+  apply_fuzz_volume(&m, seed);
 
   mwt_rng_seed(&rng, seed);
   build_scene(&sc, &rng, &m);

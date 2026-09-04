@@ -515,6 +515,314 @@ static void test_adpcm(void) {
 
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* master volume                                                       */
+/* ------------------------------------------------------------------ */
+
+/* A caller's own generator: it goes through snd_block_add() and knows nothing
+   about master volume, which is the whole point. Before the volume moved to
+   the output stage this was immune to it, and a muted mixer still produced
+   full-scale output here. */
+static void gen_scene(snd_mixer_t *m, void *user) {
+  int f;
+  (void)user;
+  snd_touch_block(m);
+  for (f = 0; f < m->block_frames; ++f)
+    snd_block_add(m, (long)f, SND_FULL_SCALE / 2);
+}
+
+/* Render `frames` with a volume that is set once up front, and report peak. */
+static long render_at_volume(mwt_sink_t *sink, int32_t vol, int block_frames) {
+  snd_mixer_t m;
+
+  mwt_sink_reset(sink);
+  snd_init(&m, RATE, 1, g_block, block_frames, mwt_sink_drain, sink);
+  snd_set_master_volume_now(&m, vol);
+  snd_render_blocked_ex(&m, sink->frames, gen_scene, 0, 0u);
+  return mwt_sink_peak(sink);
+}
+
+static void test_master_volume(void) {
+  mwt_sink_t sink;
+  long full, half, quarter, muted;
+
+  printf("master volume\n");
+  mwt_sink_init(&sink, 1024, 1);
+
+  full = render_at_volume(&sink, SND_VOL_UNITY, 256);
+  half = render_at_volume(&sink, SND_VOL_UNITY / 2, 256);
+  quarter = render_at_volume(&sink, SND_VOL_UNITY / 4, 256);
+  muted = render_at_volume(&sink, SND_VOL_SILENT, 256);
+
+  /* The generator never consults the mixer's volume, so if these differ the
+     scaling is happening at the output stage, which is what we want. */
+  MWT_CHECK(full > 0, "a caller generator at full volume is audible (%ld)",
+            full);
+  MWT_CHECK_EQ_INT(muted, 0, "a muted mixer silences a caller generator");
+  MWT_CHECK(half > full / 2 - 2 && half < full / 2 + 2,
+            "half volume halves a caller generator (%ld vs %ld)", half, full);
+  MWT_CHECK(quarter > full / 4 - 2 && quarter < full / 4 + 2,
+            "quarter volume quarters it (%ld vs %ld)", quarter, full);
+
+  /* Monotone all the way down, with no plateau above the format's own
+     quantization floor. Composing an 8.8 master into an 8.8 voice gain used to
+     give four identical steps and then a cliff well above that floor.
+
+     How far down the steps stay distinct is a property of the output word, not
+     of the mixer: the test signal is half scale, so the quietest volume that
+     survives at all is the one where (SND_FULL_SCALE/2) * vol >> 16 is still
+     1. S16 resolves every step of a 100-step square-law control; U8 has 256
+     codes total and runs out partway down, which is the same 8-bit floor the
+     DOS frontend's hardware/software split exists to stay above. Asserting the
+     computed floor rather than a hardcoded percentage keeps this test honest
+     in both formats. */
+  {
+    int pct;
+    long prev = -1;
+    int never_increases = 1;
+    int lowest_audible = 0;
+
+    for (pct = 100; pct >= 1; --pct) {
+      long p = render_at_volume(&sink, snd_vol_from_percent(pct), 256);
+      if (prev >= 0 && p > prev)
+        never_increases = 0;
+      if (p > 0)
+        lowest_audible = pct;
+      prev = p;
+    }
+    MWT_CHECK(never_increases,
+              "the volume curve never rises as the control comes down");
+
+    {
+      /* The quietest step the format can carry, derived not assumed. */
+      long signal = SND_FULL_SCALE / 2;
+      int floor_pct = 100;
+      for (pct = 1; pct <= 100; ++pct) {
+        if ((signal * (long)snd_vol_from_percent(pct)) >> SND_VOL_SHIFT) {
+          floor_pct = pct;
+          break;
+        }
+      }
+      MWT_CHECK_EQ_INT(lowest_audible, floor_pct,
+                       "the control resolves every step down to the format's "
+                       "own quantization floor");
+    }
+  }
+
+  /* Percent round-trips, so a UI can keep its slider position in the mixer. */
+  {
+    int pct, ok = 1;
+    for (pct = 0; pct <= 100; ++pct)
+      if (snd_vol_to_percent(snd_vol_from_percent(pct)) != pct)
+        ok = 0;
+    MWT_CHECK(ok, "percent survives a round trip through 16.16");
+  }
+
+  /* The old 8.8 entry point still means what it used to mean. */
+  {
+    snd_mixer_t m;
+    snd_init(&m, RATE, 1, g_block, 256, mwt_sink_drain, &sink);
+    snd_set_master_gain(&m, SND_GAIN_UNITY);
+    MWT_CHECK_EQ_INT(snd_master_volume(&m), SND_VOL_UNITY,
+                     "8.8 unity maps to 16.16 unity");
+    snd_set_master_gain(&m, (int16_t)(SND_GAIN_UNITY / 2));
+    MWT_CHECK_EQ_INT(snd_master_volume(&m), SND_VOL_UNITY / 2,
+                     "8.8 half maps to 16.16 half");
+    snd_set_master_gain(&m, (int16_t)-5);
+    MWT_CHECK_EQ_INT(snd_master_volume(&m), SND_VOL_SILENT,
+                     "a negative 8.8 gain clamps to silence");
+  }
+
+  mwt_sink_free(&sink);
+}
+
+/* Order the volume change before the first block, then render the whole thing
+   in one call at the given block size.
+
+   The change is deliberately NOT ordered from inside the render loop. Master
+   volume is applied at resolve, after mix_scene has returned, so a target set
+   partway through a render takes effect at the next block boundary -- and
+   block boundaries are by definition in different places at different block
+   sizes. Setting it up front removes the trigger from the comparison and
+   leaves exactly the thing that could actually be wrong: whether the ramp
+   advances per frame or per block. test_volume_change_is_block_quantized()
+   pins the trigger granularity separately, so neither property is left to
+   folklore. */
+static void render_with_volume_change(mwt_sink_t *sink, int block_frames,
+                                      const snd_clip_t *clip) {
+  snd_mixer_t m;
+  scene_t sc;
+
+  mwt_sink_reset(sink);
+  snd_init(&m, RATE, 1, g_block, block_frames, mwt_sink_drain, sink);
+  snd_set_master_volume_now(&m, SND_VOL_UNITY);
+  snd_set_volume_ramp(&m, 2048); /* long enough to still be moving at the end */
+  snd_set_master_volume(&m, snd_vol_from_percent(30));
+
+  memset(&sc, 0, sizeof(sc));
+  sc.count = 1;
+  snd_voice_reset(&sc.voices[0]);
+  snd_voice_start(&sc.voices[0], clip, &m, 0, (int16_t)0x0143, SND_GAIN_UNITY);
+
+  snd_render_blocked_ex(&m, sink->frames, scene_mix, &sc,
+                        SND_RENDER_SKIP_SILENT);
+}
+
+/* The invariant the whole library is built on, extended to cover the volume
+   ramp. A ramp that advanced per block rather than per frame would settle
+   after a fixed number of blocks whatever their size, so a 1024-frame render
+   would fade over 16 times as many frames as a 64-frame one -- and this test
+   would fail at the first block size that is not 256. */
+static void test_volume_ramp_block_size_invariance(void) {
+  static int16_t pcm[2000];
+  snd_clip_t clip;
+  mwt_sink_t ref, alt;
+  static const int sizes[] = {1, 3, 16, 64, 255, 256, 257, 1024};
+  size_t k;
+  long diff = -1;
+
+  printf("volume ramp block size invariance\n");
+  mwt_make_ramp16(pcm, 2000u);
+  mwt_clip_pcm16(&clip, pcm, 2000u, RATE, SND_CLIP_LOOP);
+
+  mwt_sink_init(&ref, 4096, 1);
+  mwt_sink_init(&alt, 4096, 1);
+
+  render_with_volume_change(&ref, 256, &clip);
+  MWT_CHECK(mwt_sink_peak(&ref) > 0, "the ramped reference is not silence");
+
+  for (k = 0; k < sizeof(sizes) / sizeof(sizes[0]); ++k) {
+    render_with_volume_change(&alt, sizes[k], &clip);
+    diff = -1;
+    MWT_CHECK(mwt_sink_equal(&ref, &alt, &diff),
+              "ramped volume at block size %d matches 256 (first diff %ld)",
+              sizes[k], diff);
+  }
+
+  /* The ramp must actually have moved, or the test above proves nothing: two
+     renders of a constant volume would match trivially. */
+  {
+    long early = 0, late = 0;
+    long i;
+    /* Through SND_SAMPLE_TO_MIX, because in the legacy U8 format a sample is
+       0x80-centred and its raw magnitude says nothing about loudness. */
+    for (i = 0; i < 400; ++i) {
+      long v = (long)SND_SAMPLE_TO_MIX(mwt_sink_get(&ref, i, 0));
+      if (v < 0)
+        v = -v;
+      if (v > early)
+        early = v;
+    }
+    for (i = 3000; i < 3400; ++i) {
+      long v = (long)SND_SAMPLE_TO_MIX(mwt_sink_get(&ref, i, 0));
+      if (v < 0)
+        v = -v;
+      if (v > late)
+        late = v;
+    }
+    MWT_CHECK(late < early / 2,
+              "the volume actually came down (%ld early, %ld late)", early,
+              late);
+  }
+
+  mwt_sink_free(&ref);
+  mwt_sink_free(&alt);
+}
+
+/* Pin the granularity of the trigger, so that the limit is a tested property
+   and not a surprise someone hits later.
+
+   A volume set partway through a render takes effect at the start of the next
+   block, because the output stage runs after mix_scene has returned. At the
+   default 256-frame block that is 11.6 ms of latency on a control a person is
+   dragging, which is well under the ~20 ms at which a UI feels laggy. What it
+   is NOT good enough for is automating volume as a musical event -- a fade
+   scheduled on a sequencer row would land on the block boundary rather than
+   the row. Use a voice gain or an envelope for that; this control belongs to
+   the listener, not to the song. */
+static void test_volume_change_is_block_quantized(void) {
+  snd_mixer_t m;
+  mwt_sink_t sink;
+  long done = 0;
+  long i, first_change = -1;
+
+  printf("volume change granularity\n");
+  mwt_sink_init(&sink, 1024, 1);
+  snd_init(&m, RATE, 1, g_block, 256, mwt_sink_drain, &sink);
+  snd_set_volume_ramp(&m, 0); /* no ramp, so the change is a clean edge */
+  snd_set_master_volume_now(&m, SND_VOL_UNITY);
+
+  while (done < sink.frames) {
+    /* Ordered at frame 300, which is 44 frames into the second block. */
+    if (done > 300 && snd_master_volume(&m) == SND_VOL_UNITY)
+      snd_set_master_volume(&m, SND_VOL_SILENT);
+    snd_render_one_block(&m, done, 256, gen_scene, 0, 0u);
+    done += 256;
+  }
+
+  for (i = 0; i < sink.frames; ++i) {
+    if (mwt_sink_get(&sink, i, 0) == SND_SAMPLE_SILENCE) {
+      first_change = i;
+      break;
+    }
+  }
+  MWT_CHECK_EQ_INT(first_change, 512,
+                   "a volume set mid-block lands on the next block boundary");
+
+  mwt_sink_free(&sink);
+}
+
+/* A ramp exists to stop a volume change from being a step discontinuity, so
+   assert the absence of the step rather than just the presence of the ramp. */
+static void test_volume_ramp_has_no_step(void) {
+  snd_mixer_t m;
+  mwt_sink_t sink;
+  long i, worst_ramped = 0, worst_instant = 0;
+  int pass;
+
+  printf("volume ramp smoothness\n");
+  mwt_sink_init(&sink, 1024, 1);
+
+  for (pass = 0; pass < 2; ++pass) {
+    long done = 0;
+    long worst = 0;
+
+    mwt_sink_reset(&sink);
+    snd_init(&m, RATE, 1, g_block, 64, mwt_sink_drain, &sink);
+    snd_set_volume_ramp(&m, (pass == 0) ? 256 : 0);
+    snd_set_master_volume_now(&m, SND_VOL_UNITY);
+
+    /* Constant full-scale DC: every sample-to-sample difference in the output
+       is therefore caused by the volume control and nothing else. */
+    while (done < sink.frames) {
+      if (done == 256)
+        snd_set_master_volume(&m, SND_VOL_SILENT);
+      snd_render_one_block(&m, done, 64, gen_scene, 0, 0u);
+      done += 64;
+    }
+
+    for (i = 1; i < sink.frames; ++i) {
+      long d = (long)SND_SAMPLE_TO_MIX(mwt_sink_get(&sink, i, 0)) -
+               (long)SND_SAMPLE_TO_MIX(mwt_sink_get(&sink, i - 1, 0));
+      if (d < 0)
+        d = -d;
+      if (d > worst)
+        worst = d;
+    }
+    if (pass == 0)
+      worst_ramped = worst;
+    else
+      worst_instant = worst;
+  }
+
+  MWT_CHECK(worst_instant > worst_ramped * 4,
+            "an unramped change steps hard (%ld) and a ramped one does not "
+            "(%ld)",
+            worst_instant, worst_ramped);
+
+  mwt_sink_free(&sink);
+}
+
 static void test_gain_and_saturation(void) {
   static int16_t pcm[256];
   snd_clip_t clip;
@@ -1055,6 +1363,10 @@ int main(void) {
   test_adpcm();
 #endif
   test_gain_and_saturation();
+  test_master_volume();
+  test_volume_ramp_block_size_invariance();
+  test_volume_ramp_has_no_step();
+  test_volume_change_is_block_quantized();
 #if SND_WIDE_ACCUM
   test_accumulator_agreement();
 #endif
