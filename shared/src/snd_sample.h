@@ -65,4 +65,28 @@ typedef int16_t snd_sample_t;
 #define SND_GAIN_UNITY ((int16_t)(1 << SND_GAIN_SHIFT))
 #define SND_GAIN_SILENT ((int16_t)0)
 
+/* Master volume is a wider fixed point than per-voice gain, deliberately.
+
+   Voice gain is a mixing decision made once per note and it multiplies a
+   source. Master volume is a control a person drags, and it multiplies the
+   finished block. Those want different resolutions: 8.8 gives 256 steps, and
+   the bottom step of a 256-step linear control is a 6 dB jump, which is
+   audible as a click rather than as a volume change. 16.16 gives 65536, and
+   costs the same single multiply.
+
+   It is capped at unity on purpose. Boost above 1.0 belongs on a voice, where
+   the caller owns the consequence. A master control that can push a finished
+   mix into the clamp is not a volume control, it is a distortion pedal. */
+#define SND_VOL_SHIFT 16
+#define SND_VOL_UNITY ((int32_t)1 << SND_VOL_SHIFT)
+#define SND_VOL_SILENT ((int32_t)0)
+
+/* Frames a ramped volume change takes to travel the full 0..1 range. The
+   mixer moves toward the target at this fixed slope, so a small change
+   settles quickly and a large one still takes long enough not to click.
+   256 frames is 11.6 ms at 22050 Hz. Set to 0 to disable ramping. */
+#ifndef SND_VOL_RAMP_FRAMES
+#define SND_VOL_RAMP_FRAMES 256
+#endif
+
 #endif /* SND_SAMPLE_H */

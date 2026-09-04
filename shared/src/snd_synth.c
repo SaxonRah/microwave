@@ -285,7 +285,8 @@ void snd_mix_tone(snd_mixer_t SND_PTR *m, snd_tone_t SND_PTR *t) {
   /* Only clear once we know we will write. */
   snd_touch_block(m);
 
-  g = ((long)t->gain * (long)m->master_gain) >> SND_GAIN_SHIFT;
+  /* Tone gain only; the mixer scales the finished block by master volume. */
+  g = (long)t->gain;
 
   for (f = f0; f < f1; ++f) {
     long abs_frame = block_start + (long)f;

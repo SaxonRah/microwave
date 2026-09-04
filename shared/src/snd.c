@@ -191,7 +191,11 @@ void snd_init(snd_mixer_t SND_PTR *m, int rate, int channels,
   m->block_capacity = (long)block_frames * (long)channels;
   m->span_0 = 0;
   m->span_1 = 0;
-  m->master_gain = SND_GAIN_UNITY;
+  m->master_vol = SND_VOL_UNITY;
+  m->master_vol_cur = SND_VOL_UNITY;
+  m->master_vol_step = (SND_VOL_RAMP_FRAMES > 0)
+                           ? (SND_VOL_UNITY / (int32_t)SND_VOL_RAMP_FRAMES)
+                           : 0;
   m->block_touched = 0;
   m->drain = drain;
   m->drain_begin = 0;
@@ -210,12 +214,199 @@ void snd_set_block_capacity(snd_mixer_t SND_PTR *m, long samples) {
   m->block_capacity = samples;
 }
 
+/* ------------------------------------------------------------------ */
+/* master volume                                                       */
+/* ------------------------------------------------------------------ */
+
+static int32_t snd_vol_clamp(int32_t v) {
+  if (v < SND_VOL_SILENT)
+    return SND_VOL_SILENT;
+  if (v > SND_VOL_UNITY)
+    return SND_VOL_UNITY;
+  return v;
+}
+
+void snd_set_master_volume(snd_mixer_t SND_PTR *m, int32_t vol_16_16) {
+  if (!m)
+    return;
+  m->master_vol = snd_vol_clamp(vol_16_16);
+  if (m->master_vol_step <= 0)
+    m->master_vol_cur = m->master_vol;
+}
+
+void snd_set_master_volume_now(snd_mixer_t SND_PTR *m, int32_t vol_16_16) {
+  if (!m)
+    return;
+  m->master_vol = snd_vol_clamp(vol_16_16);
+  m->master_vol_cur = m->master_vol;
+}
+
+void snd_set_volume_ramp(snd_mixer_t SND_PTR *m, int frames) {
+  if (!m)
+    return;
+  if (frames <= 0) {
+    m->master_vol_step = 0;
+    m->master_vol_cur = m->master_vol; /* nothing left to ramp toward */
+    return;
+  }
+  m->master_vol_step = SND_VOL_UNITY / (int32_t)frames;
+  if (m->master_vol_step <= 0)
+    m->master_vol_step = 1; /* a ramp longer than 65536 frames still moves */
+}
+
+int32_t snd_master_volume(const snd_mixer_t SND_PTR *m) {
+  return m ? m->master_vol : SND_VOL_SILENT;
+}
+
+int32_t snd_master_volume_current(const snd_mixer_t SND_PTR *m) {
+  return m ? m->master_vol_cur : SND_VOL_SILENT;
+}
+
+int snd_master_is_silent(const snd_mixer_t SND_PTR *m) {
+  if (!m)
+    return 1;
+  return (m->master_vol == SND_VOL_SILENT &&
+          m->master_vol_cur == SND_VOL_SILENT);
+}
+
+/* pct*pct/10000 in 16.16. The intermediate is at most 100*100*65536, which
+   needs 30 bits, so it is computed in int32_t and not in int. */
+int32_t snd_vol_from_percent(int pct) {
+  int32_t p;
+
+  if (pct <= 0)
+    return SND_VOL_SILENT;
+  if (pct >= 100)
+    return SND_VOL_UNITY;
+  p = (int32_t)pct;
+  return (p * p * SND_VOL_UNITY) / 10000L;
+}
+
+/* The inverse, by integer square root, so a UI can round-trip its own slider
+   position without keeping a shadow copy. */
+int snd_vol_to_percent(int32_t vol_16_16) {
+  int32_t target, lo, hi;
+
+  if (vol_16_16 <= SND_VOL_SILENT)
+    return 0;
+  if (vol_16_16 >= SND_VOL_UNITY)
+    return 100;
+  target = vol_16_16;
+  lo = 0;
+  hi = 100;
+  while (lo < hi) {
+    int32_t mid = (lo + hi + 1) / 2;
+    if ((mid * mid * SND_VOL_UNITY) / 10000L <= target)
+      lo = mid;
+    else
+      hi = mid - 1;
+  }
+  return (int)lo;
+}
+
 void snd_set_master_gain(snd_mixer_t SND_PTR *m, int16_t gain_8_8) {
+  int32_t v;
+
   if (!m)
     return;
   if (gain_8_8 < 0)
     gain_8_8 = 0;
-  m->master_gain = gain_8_8;
+  /* 8.8 -> 16.16 is an exact shift, and the old API had no ramp, so this
+     jumps. Callers that want the ramp have snd_set_master_volume(). */
+  v = (int32_t)gain_8_8 << (SND_VOL_SHIFT - SND_GAIN_SHIFT);
+  snd_set_master_volume_now(m, v);
+}
+
+/* Move one output frame's worth toward the target. Deliberately a function of
+   frames elapsed and nothing else: if this depended on how many frames
+   happened to be in the current block, two block sizes would produce
+   different ramps and test_volume_ramp_block_size_invariance() would catch
+   it. Same discipline as carrying a resample phase across a block edge. */
+static int32_t snd_vol_advance(int32_t cur, int32_t target, int32_t step) {
+  if (step <= 0 || cur == target)
+    return target;
+  if (cur < target) {
+    cur += step;
+    if (cur > target)
+      cur = target;
+  } else {
+    cur -= step;
+    if (cur < target)
+      cur = target;
+  }
+  return cur;
+}
+
+/* Scale one sample by a 16.16 volume.
+
+   The multiply is bounded: this runs on the block after the clamp, so the
+   magnitude is at most SND_MIX_MAX, and volume is at most SND_VOL_UNITY.
+   32767 * 65536 is 2147418112, which fits in int32_t with 65535 to spare.
+   That headroom is the reason master volume is capped at unity and applied
+   post-clamp rather than into the wide accumulator -- doing it pre-clamp
+   would need a 64-bit intermediate that DOS does not have. */
+static snd_sample_t snd_vol_scale(snd_sample_t s, int32_t vol) {
+  int32_t v = (int32_t)SND_SAMPLE_TO_MIX(s);
+  v = (v * vol) >> SND_VOL_SHIFT;
+  return (snd_sample_t)SND_MIX_TO_SAMPLE(snd_clip_sample((long)v));
+}
+
+/* Advance the ramp across frames whose samples are not being scaled, because
+   they are already known to be silence. Silence times any volume is silence,
+   so the output is identical either way -- but the ramp position must still
+   move, or a muted stretch would leave the volume where it was and the next
+   audible block would start from the wrong place. */
+static void snd_master_skip(snd_mixer_t SND_PTR *m, int frames) {
+  int f;
+
+  if (!m || m->master_vol_cur == m->master_vol)
+    return;
+  for (f = 0; f < frames; ++f)
+    m->master_vol_cur =
+        snd_vol_advance(m->master_vol_cur, m->master_vol, m->master_vol_step);
+}
+
+/* The output stage. Everything that generates sound has already been summed
+   and clamped into m->block by the time this runs, which is exactly why one
+   pass here covers voices, synth tones and a caller's own generator without
+   any of them knowing it exists. */
+static void snd_master_apply(snd_mixer_t SND_PTR *m) {
+  long i, n;
+  int f, c;
+  int32_t vol;
+
+  if (!m || !m->block || m->block_frames <= 0)
+    return;
+
+  n = (long)m->block_frames * (long)m->channels;
+
+  if (m->master_vol_cur == m->master_vol) {
+    /* Settled. Two cases are free and one is a single multiply per sample. */
+    if (m->master_vol_cur == SND_VOL_UNITY)
+      return; /* the default costs nothing, which is the point */
+    if (m->master_vol_cur == SND_VOL_SILENT) {
+      for (i = 0; i < n; ++i)
+        m->block[i] = SND_SAMPLE_SILENCE;
+      return;
+    }
+    vol = m->master_vol_cur;
+    for (i = 0; i < n; ++i)
+      m->block[i] = snd_vol_scale(m->block[i], vol);
+    return;
+  }
+
+  /* Ramping: the gain changes once per frame, and both samples of a stereo
+     frame get the same one. Interpolating within a frame would put a
+     different gain on left and right and shift the stereo image. */
+  vol = m->master_vol_cur;
+  for (f = 0; f < m->block_frames; ++f) {
+    vol = snd_vol_advance(vol, m->master_vol, m->master_vol_step);
+    for (c = 0; c < m->channels; ++c) {
+      long idx = (long)f * (long)m->channels + (long)c;
+      m->block[idx] = snd_vol_scale(m->block[idx], vol);
+    }
+  }
+  m->master_vol_cur = vol;
 }
 
 #if SND_WIDE_ACCUM
@@ -360,6 +551,22 @@ void snd_touch_block(snd_mixer_t SND_PTR *m) {
   m->block_touched = 1;
 }
 
+/* Bring the block into its final form: collapse the wide accumulator if there
+   is one, then apply the output-stage volume. Both the synchronous and the
+   pipelined loop go through here, so there is one definition of "finished
+   block" and the two cannot drift apart. */
+static void snd_resolve_block(snd_mixer_t SND_PTR *m) {
+#if SND_WIDE_ACCUM
+  if (m->accum && m->block) {
+    long i, n = (long)m->block_frames * (long)m->channels;
+    for (i = 0; i < n; ++i)
+      m->block[i] =
+          (snd_sample_t)SND_MIX_TO_SAMPLE(snd_clip_sample((long)m->accum[i]));
+  }
+#endif
+  snd_master_apply(m);
+}
+
 void snd_flush_block(snd_mixer_t SND_PTR *m) {
   if (!m || m->block_frames <= 0)
     return;
@@ -368,14 +575,7 @@ void snd_flush_block(snd_mixer_t SND_PTR *m) {
   if (!m->block_touched)
     snd_clear_block(m);
 
-#if SND_WIDE_ACCUM
-  if (m->accum && m->block) {
-    long i, n = (long)m->block_frames * (long)m->channels;
-    for (i = 0; i < n; ++i)
-      m->block[i] = (snd_sample_t)SND_MIX_TO_SAMPLE(
-          snd_clip_sample((long)m->accum[i]));
-  }
-#endif
+  snd_resolve_block(m);
 
   if (m->drain)
     m->drain(m, m->block_frame, m->block_frames, m->block, m->user);
@@ -422,7 +622,15 @@ void snd_render_one_block(snd_mixer_t SND_PTR *m, long frame, int frames,
   if (mix_scene)
     mix_scene(m, scene_user);
 
-  if (!m->block_touched && (flags & SND_RENDER_SKIP_SILENT)) {
+  /* The scene still runs when the mixer is muted. Skipping it would stop the
+     sequencer and freeze every voice's position, so unmuting would resume
+     where the music left off instead of where it should have got to -- mute
+     is a volume setting, not a pause button. What muting does save is the
+     resolve pass and the drain's format conversion, which on DOS is the
+     packing loop and on the Pico is a DMA transfer. */
+  if ((flags & SND_RENDER_SKIP_SILENT) &&
+      (!m->block_touched || snd_master_is_silent(m))) {
+    snd_master_skip(m, m->block_frames);
     if (m->drain)
       m->drain(m, m->block_frame, m->block_frames, 0, m->user);
     return;
@@ -493,14 +701,7 @@ void snd_render_blocked_pipelined(
 
     if (!m->block_touched)
       snd_clear_block(m);
-#if SND_WIDE_ACCUM
-    if (m->accum) {
-      long i, cnt = (long)m->block_frames * (long)m->channels;
-      for (i = 0; i < cnt; ++i)
-        m->block[i] = (snd_sample_t)SND_MIX_TO_SAMPLE(
-            snd_clip_sample((long)m->accum[i]));
-    }
-#endif
+    snd_resolve_block(m);
 
     /* Wait for the previous transfer only now, so rasterizing this block
        overlapped it. */
@@ -786,8 +987,10 @@ void snd_mix_voice_pcm16(snd_mixer_t SND_PTR *m, snd_voice_t SND_PTR *v) {
   snd_touch_block(m);
   src = (const int16_t SND_PTR *)c->data;
   stereo_src = (c->channels == 2u);
-  gl = ((long)v->gain_l * (long)m->master_gain) >> SND_GAIN_SHIFT;
-  gr = ((long)v->gain_r * (long)m->master_gain) >> SND_GAIN_SHIFT;
+  /* Voice gain only. Master volume is an output-stage gain now; folding it
+     in here would compose two fixed-point gains and lose the low bits. */
+  gl = (long)v->gain_l;
+  gr = (long)v->gain_r;
 
   for (f = f0; f < f1; ++f) {
     long idx = SND_FROM_FIXED(v->pos);
@@ -847,8 +1050,10 @@ void snd_mix_voice_pcm8(snd_mixer_t SND_PTR *m, snd_voice_t SND_PTR *v) {
   snd_touch_block(m);
   src = (const uint8_t SND_PTR *)c->data;
   stereo_src = (c->channels == 2u);
-  gl = ((long)v->gain_l * (long)m->master_gain) >> SND_GAIN_SHIFT;
-  gr = ((long)v->gain_r * (long)m->master_gain) >> SND_GAIN_SHIFT;
+  /* Voice gain only. Master volume is an output-stage gain now; folding it
+     in here would compose two fixed-point gains and lose the low bits. */
+  gl = (long)v->gain_l;
+  gr = (long)v->gain_r;
 
   for (f = f0; f < f1; ++f) {
     long idx = SND_FROM_FIXED(v->pos);
@@ -890,8 +1095,10 @@ void snd_mix_voice_adpcm(snd_mixer_t SND_PTR *m, snd_voice_t SND_PTR *v) {
     return;
 
   snd_touch_block(m);
-  gl = ((long)v->gain_l * (long)m->master_gain) >> SND_GAIN_SHIFT;
-  gr = ((long)v->gain_r * (long)m->master_gain) >> SND_GAIN_SHIFT;
+  /* Voice gain only. Master volume is an output-stage gain now; folding it
+     in here would compose two fixed-point gains and lose the low bits. */
+  gl = (long)v->gain_l;
+  gr = (long)v->gain_r;
 
   for (f = f0; f < f1; ++f) {
     long idx = SND_FROM_FIXED(v->pos);

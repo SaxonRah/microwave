@@ -66,7 +66,23 @@ struct snd_mixer {
   int span_0;
   int span_1; /* exclusive */
 
-  int16_t master_gain; /* 8.8, applied per voice on the way in */
+  /* Master volume: an output-stage DSP gain, applied once to the finished
+     block just before the drain, never to a source on the way in.
+
+     This is the only placement that makes a volume control mean what it says.
+     A gain folded into each voice reaches only the things the mixer knows how
+     to mix -- it misses anything a caller generates through snd_block_add(),
+     and it loses low bits composing two fixed-point gains, so quiet voices
+     staircase and drop out before loud ones get quiet. Applied here it covers
+     voices, synth tones and caller generators identically, and no generator
+     has to remember to cooperate.
+
+     It is applied after the clamp, not before, so turning the volume down on
+     a mix that is already clipping makes it quieter without changing its
+     timbre. Volume should not alter the character of what it attenuates. */
+  int32_t master_vol;      /* 16.16 target, what the caller asked for */
+  int32_t master_vol_cur;  /* 16.16 actual, walks toward the target */
+  int32_t master_vol_step; /* 16.16 units per frame; 0 means step instantly */
 
   /* Set by the mix layer whenever a voice actually contributed to the current
      block. snd_render_blocked() reads it to decide whether the block can be
@@ -164,6 +180,45 @@ void snd_init(snd_mixer_t SND_PTR *m, int rate, int channels,
               snd_sample_t SND_PTR *block_buffer, int block_frames,
               snd_drain_fn drain, void SND_PTR *user);
 void snd_set_block_capacity(snd_mixer_t SND_PTR *m, long samples);
+
+/* ------------------------------------------------------------------ */
+/* master volume                                                       */
+/* ------------------------------------------------------------------ */
+
+/* Set the target volume, 16.16, clamped to 0..SND_VOL_UNITY. The mixer walks
+   toward it at snd_set_volume_ramp()'s slope rather than jumping, so this is
+   safe to call from a key handler on every frame while a slider is dragged.
+
+   The walk advances one step per *output frame*, carried across blocks the
+   same way a voice's resample phase is. That is what keeps a volume change
+   sample-identical at every block size, and there is a test that says so. */
+void snd_set_master_volume(snd_mixer_t SND_PTR *m, int32_t vol_16_16);
+/* Jump to a volume with no ramp. For setting an initial volume before the
+   first block, or for a target that has its own hardware ramp. */
+void snd_set_master_volume_now(snd_mixer_t SND_PTR *m, int32_t vol_16_16);
+/* Frames the ramp takes to traverse the whole 0..1 range. 0 disables ramping,
+   which is what a target with no cycles to spare wants. */
+void snd_set_volume_ramp(snd_mixer_t SND_PTR *m, int frames);
+int32_t snd_master_volume(const snd_mixer_t SND_PTR *m);
+/* The volume actually being applied right now, which differs from the target
+   while a ramp is in flight. A UI should display the target; a test that
+   wants to know what the last block was scaled by wants this. */
+int32_t snd_master_volume_current(const snd_mixer_t SND_PTR *m);
+/* True when the volume is at zero and not ramping, so the block can be
+   drained as silence without being scaled or converted. */
+int snd_master_is_silent(const snd_mixer_t SND_PTR *m);
+
+/* Percent to 16.16, square law. A linear amplitude control spends most of its
+   travel in a range that sounds like "loud", because loudness is roughly
+   amplitude squared; squaring the control puts the audible half of the range
+   in the middle of the slider where a person can find it. One multiply, so
+   the 386 can have it too. */
+int32_t snd_vol_from_percent(int pct);
+int snd_vol_to_percent(int32_t vol_16_16);
+
+/* Compatibility with the older 8.8 master gain. Exact for the values callers
+   actually passed, and unramped, so existing renders stay deterministic.
+   Prefer snd_set_master_volume(). */
 void snd_set_master_gain(snd_mixer_t SND_PTR *m, int16_t gain_8_8);
 
 #if SND_WIDE_ACCUM
