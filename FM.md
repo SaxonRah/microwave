@@ -66,7 +66,7 @@ parts that materially affect game music:
 Unknown/irrelevant controllers remain harmless because `snd_midi` is still the
 protocol/state authority.
 
-## Instruments and Doom's future GENMIDI adapter
+## Instruments and Doom's GENMIDI adapter
 
 The bank is generic and caller-owned:
 
@@ -76,21 +76,20 @@ percussion key -> snd_fm_instrument_t
 ```
 
 An instrument contains one or two FM layers. Two layers are deliberate: DMX
-GENMIDI has double-voice instruments, so a future `snd_genmidi` adapter can
-represent them without changing this synth API or throwing away the second
-voice.
+GENMIDI has double-voice instruments, so `snd_genmidi` can represent them
+without changing this synth API or throwing away the second voice.
 
 Each layer has a whole-semitone transpose plus signed 1/128-semitone detune.
 This also leaves enough resolution for GENMIDI's second-voice fine tuning.
 Fixed-note instruments are supported at the instrument level for percussion.
 
-No GENMIDI parser exists in this layer. The intended future boundary is:
+`snd_genmidi` now owns that parsing/translation boundary:
 
 ```text
 GENMIDI lump bytes
        |
        v
- future snd_genmidi
+       snd_genmidi
        |
        v
 snd_midi_fm_bank_t
@@ -141,7 +140,7 @@ This backend does not imply or implement:
 - SoundFonts or General MIDI wavetable instruments;
 - exact OPL register emulation;
 - Doom WAD access;
-- DMX GENMIDI parsing;
+- WAD lookup / ownership of GENMIDI bytes;
 - MOD/XM/S3M/IT playback.
 
 Those remain independent source/bank/backend layers if the project actually

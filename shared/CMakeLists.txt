@@ -10,6 +10,7 @@ option(MW_BUILD_SEQUENCER "Also build the optional pattern sequencer layer" OFF)
 option(MW_BUILD_MIDI "Also build the optional MIDI message/state layer" OFF)
 option(MW_BUILD_MUS "Also build the optional MUS source adapter" OFF)
 option(MW_BUILD_MIDI_FM "Also build the optional two-operator MIDI FM backend" OFF)
+option(MW_BUILD_GENMIDI "Also build the optional DMX GENMIDI bank adapter" OFF)
 option(MW_BUILD_PACK "Also build the pack reader (needs stdio)" OFF)
 
 # This is the actual mixer. It deliberately contains no clock, no device, no
@@ -53,7 +54,7 @@ endif()
 # MIDI is a protocol/state layer, not a song parser and not a synthesizer.
 # It deliberately has no dependency on microwave_snd so the same decoder can
 # feed a software synth, OPL backend, or hardware MIDI transport.
-if(MW_BUILD_MIDI OR MW_BUILD_MUS OR MW_BUILD_MIDI_FM)
+if(MW_BUILD_MIDI OR MW_BUILD_MUS OR MW_BUILD_MIDI_FM OR MW_BUILD_GENMIDI)
     add_library(microwave_midi STATIC src/snd_midi.c)
     add_library(microwave::midi ALIAS microwave_midi)
     target_include_directories(microwave_midi PUBLIC "${CMAKE_CURRENT_LIST_DIR}/src")
@@ -80,7 +81,7 @@ endif()
 
 # OPL-shaped two-operator software FM. This is a MIDI sink and sample generator,
 # not a source-format parser and not a register-accurate YM3812 emulator.
-if(MW_BUILD_MIDI_FM)
+if(MW_BUILD_MIDI_FM OR MW_BUILD_GENMIDI)
     add_library(microwave_midi_fm STATIC src/snd_midi_fm.c)
     add_library(microwave::midi_fm ALIAS microwave_midi_fm)
     target_include_directories(microwave_midi_fm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/src")
@@ -89,6 +90,20 @@ if(MW_BUILD_MIDI_FM)
         target_compile_options(microwave_midi_fm PRIVATE /W4)
     else()
         target_compile_options(microwave_midi_fm PRIVATE ${MW_WARNINGS_GNU})
+    endif()
+endif()
+
+# DMX GENMIDI is a packed patch-bank adapter. It translates caller-owned bank
+# bytes into the generic FM bank and has no WAD, stdio, or allocator dependency.
+if(MW_BUILD_GENMIDI)
+    add_library(microwave_genmidi STATIC src/snd_genmidi.c)
+    add_library(microwave::genmidi ALIAS microwave_genmidi)
+    target_include_directories(microwave_genmidi PUBLIC "${CMAKE_CURRENT_LIST_DIR}/src")
+    target_link_libraries(microwave_genmidi PUBLIC microwave_midi_fm)
+    if(MSVC)
+        target_compile_options(microwave_genmidi PRIVATE /W4)
+    else()
+        target_compile_options(microwave_genmidi PRIVATE ${MW_WARNINGS_GNU})
     endif()
 endif()
 

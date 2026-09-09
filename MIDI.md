@@ -62,11 +62,10 @@ Likewise, `snd_midi` should not know what a WAD is.
 
 ## Deliberately deferred
 
-`snd_mus` now implements the first source adapter and `snd_midi_fm` provides the first software synthesis backend; see `MUS.md` and `FM.md`. The remaining milestones stay separate:
+`snd_mus` implements the first source adapter, `snd_midi_fm` provides the first software synthesis backend, and `snd_genmidi` now translates Doom-family GENMIDI banks into that generic FM representation; see `MUS.md`, `FM.md`, and `GENMIDI.md`. The remaining milestones stay separate:
 
-1. **DMX/GENMIDI patch-bank adapter** -- translate Doom-family OPL instrument data into the generic layered FM bank without putting WAD knowledge in the synth.
-2. **Register-accurate OPL backend** -- optional later work if exact YM3812/YMF262 behavior is worth the additional code; `snd_midi_fm` intentionally does not claim that accuracy.
-3. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
-4. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
+1. **Register-accurate OPL backend** -- optional later work if exact YM3812/YMF262 behavior is worth the additional code; `snd_midi_fm` intentionally does not claim that accuracy.
+2. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
+3. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
 
 That keeps the undertaking finite: one source format and one renderer can be added at a time around a stable event boundary.
