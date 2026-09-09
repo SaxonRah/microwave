@@ -84,10 +84,13 @@ add_library(microwave_seq STATIC
     "${MW_SHARED_SRC}/mw_music_demo.c")
 target_link_libraries(microwave_seq PUBLIC microwave_snd)
 
+add_library(microwave_midi STATIC "${MW_SHARED_SRC}/snd_midi.c")
+target_include_directories(microwave_midi PUBLIC "${MW_SHARED_SRC}")
+
 add_library(microwave_pack STATIC "${MW_SHARED_SRC}/snd_pack.c")
 target_link_libraries(microwave_pack PUBLIC microwave_snd)
 
-foreach(target microwave_snd microwave_seq microwave_pack)
+foreach(target microwave_snd microwave_seq microwave_midi microwave_pack)
     target_include_directories(${target} PUBLIC "${MW_SHARED_SRC}")
     # Instrument the libraries themselves, not only the test executables.
     # Otherwise the CI job name overstates its coverage.
@@ -131,6 +134,15 @@ endfunction()
 mw_add_test_binary(mw_test_unit mw_test_unit.c)
 mw_add_test_binary(mw_test_fuzz mw_test_fuzz.c)
 
+add_executable(mw_test_midi mw_test_midi.c)
+target_include_directories(mw_test_midi PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${MW_SHARED_SRC}")
+target_link_libraries(mw_test_midi PRIVATE microwave_midi mw_sanitizers)
+if(NOT MSVC)
+    target_compile_options(mw_test_midi PRIVATE -Wall -Wextra)
+endif()
+
 # The benchmark measures the mixer, so it is always built optimised and never
 # linked against sanitizers, whatever the build type is.
 add_executable(mw_test_bench mw_test_bench.c)
@@ -144,6 +156,9 @@ enable_testing()
 
 add_test(NAME unit COMMAND mw_test_unit)
 set_tests_properties(unit PROPERTIES TIMEOUT 120 LABELS "unit")
+
+add_test(NAME midi COMMAND mw_test_midi)
+set_tests_properties(midi PROPERTIES TIMEOUT 30 LABELS "midi")
 
 # Several seeds, so a regression that only shows up for particular geometry has
 # somewhere to surface. Each is deterministic and reproducible from its seed.
