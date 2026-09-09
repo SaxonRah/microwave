@@ -15,7 +15,7 @@ This layer intentionally stops at the MIDI message boundary.
 - one sink callback that receives the normalized event and the new channel state;
 - no allocation, stdio, clock or audio dependency.
 
-It deliberately does **not** parse a `.mid` file, parse Doom MUS, synthesize General MIDI instruments, load a SoundFont, emulate OPL, or understand MOD/XM/S3M/IT.
+It deliberately does **not** parse a `.mid` file, synthesize General MIDI instruments, load a SoundFont, emulate OPL, or understand MOD/XM/S3M/IT. Doom MUS parsing now lives in the separate `snd_mus` adapter.
 
 Those are different jobs and should stay different jobs.
 
@@ -26,7 +26,7 @@ Those are different jobs and should stay different jobs.
 
         Doom MUS            Standard MIDI File          live MIDI bytes
            |                       |                         |
-     future snd_mus          future snd_smf            snd_midi_feed_byte
+          snd_mus            future snd_smf            snd_midi_feed_byte
            |                       |                         |
            +-----------------------+-------------------------+
                                    |
@@ -61,11 +61,10 @@ Likewise, `snd_midi` should not know what a WAD is.
 
 ## Deliberately deferred
 
-The following are separate milestones, not implied by the existence of this file:
+`snd_mus` now implements the first source adapter as a zero-allocation reader over caller-owned MUS bytes; see `MUS.md`. The remaining milestones stay separate:
 
-1. **MUS source adapter** -- zero-allocation reader over an in-memory lump, converting MUS events and its time deltas into MIDI messages.
-2. **A real synthesis backend** -- probably OPL-compatible first for Doom, with the MIDI core making a later sample/wavetable backend possible without changing MUS parsing.
-3. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
-4. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
+1. **A real synthesis backend** -- probably OPL-compatible first for Doom, with the MIDI core making a later sample/wavetable backend possible without changing MUS parsing.
+2. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
+3. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
 
 That keeps the undertaking finite: one source format and one renderer can be added at a time around a stable event boundary.
