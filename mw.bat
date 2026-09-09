@@ -20,6 +20,8 @@ rem   .\mw.bat run headless [args...]
 rem   .\mw.bat run pico [preset] [swd|picotool|manual] [build settings]
 rem
 rem   .\mw.bat test [default|u8|narrow|all]
+rem   .\mw.bat tool genmidi-wav [args...]
+rem   .\mw.bat tool build
 rem   .\mw.bat bench [seconds]
 rem   .\mw.bat clean
 rem ===========================================================================
@@ -37,6 +39,7 @@ if "%CMD%"=="" set "CMD=help"
 if /i "%CMD%"=="build" goto do_build
 if /i "%CMD%"=="run"   goto do_run
 if /i "%CMD%"=="test"  goto do_test
+if /i "%CMD%"=="tool"  goto do_tool
 if /i "%CMD%"=="bench" goto do_bench
 if /i "%CMD%"=="clean" goto do_clean
 if /i "%CMD%"=="help"  goto do_help
@@ -53,6 +56,10 @@ exit /b %ERRORLEVEL%
 
 :do_run
 call "%MW_ROOT%\scripts\mw_run.bat" %*
+exit /b %ERRORLEVEL%
+
+:do_tool
+call "%MW_ROOT%\scripts\mw_tool.bat" %*
 exit /b %ERRORLEVEL%
 
 :do_test
@@ -116,6 +123,8 @@ echo.
 echo   .\mw.bat build assets ^| dos ^| pico [preset] [settings] ^| raylib ^| headless ^| tests ^| all
 echo   .\mw.bat run dos ^| raylib ^| headless ^| pico [preset] [flash-method]
 echo   .\mw.bat test [default^|u8^|narrow^|all]
+echo   .\mw.bat tool genmidi-wav [--wad file --music lump --out file ...]
+echo   .\mw.bat tool build
 echo   .\mw.bat bench [seconds]
 echo   .\mw.bat clean
 echo.

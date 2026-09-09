@@ -61,6 +61,7 @@ void snd_midi_fm_init(snd_midi_fm_t SND_PTR *fm) {
   fm->bank.fallback = &snd_fm_default_instrument;
   fm->bank.percussion_fallback = &snd_fm_default_percussion_instrument;
   fm->voice_limit = 9; /* OPL2-shaped default; OPL3-style callers may select 18. */
+  fm->output_gain = (int16_t)SND_MIDI_FM_DEFAULT_OUTPUT_GAIN;
   snd_midi_fm_clear_runtime(fm);
 }
 
@@ -104,6 +105,17 @@ void snd_midi_fm_set_voice_limit(snd_midi_fm_t SND_PTR *fm, int voices) {
   fm->voice_limit = voices;
   for (i = voices; i < SND_MIDI_FM_MAX_VOICES; ++i)
     fm->voices[i].active = 0u;
+}
+
+void snd_midi_fm_set_output_gain(snd_midi_fm_t SND_PTR *fm,
+                                 int16_t gain_8_8) {
+  if (!fm)
+    return;
+  if (gain_8_8 < 0)
+    gain_8_8 = 0;
+  if (gain_8_8 > SND_GAIN_UNITY)
+    gain_8_8 = SND_GAIN_UNITY;
+  fm->output_gain = gain_8_8;
 }
 
 void snd_midi_fm_bind(snd_midi_fm_t SND_PTR *fm, snd_midi_t SND_PTR *midi) {
@@ -556,6 +568,9 @@ static long snd_midi_fm_note_gain(const snd_midi_fm_t SND_PTR *fm,
   g = ((long)v->velocity * (long)SND_GAIN_UNITY + 63L) / 127L;
   g = (g * (long)c->volume + 63L) / 127L;
   g = (g * (long)c->expression + 63L) / 127L;
+  g = (g * (long)fm->output_gain +
+       (1L << (SND_GAIN_SHIFT - 1))) >>
+      SND_GAIN_SHIFT;
   if (g < 0L)
     g = 0L;
   if (g > 32767L)

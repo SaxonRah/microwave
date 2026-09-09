@@ -32,6 +32,14 @@ extern "C" {
 #define SND_MIDI_FM_QUEUE_EVENTS 128
 #endif
 
+/* Leave deliberate room for several independent FM voices to add together.
+ * A single operator can approach full scale, so unity per voice clips normal
+ * polyphony long before the mixer itself is doing anything wrong. 1/4 is
+ * 12 dB of pre-sum headroom. Callers can override it per synth. */
+#ifndef SND_MIDI_FM_DEFAULT_OUTPUT_GAIN
+#define SND_MIDI_FM_DEFAULT_OUTPUT_GAIN (SND_GAIN_UNITY / 4)
+#endif
+
 #define SND_FM_FIXED_NOTE_NONE 0xFFu
 #define SND_FM_ALGORITHM_FM 0u
 #define SND_FM_ALGORITHM_ADDITIVE 1u
@@ -136,6 +144,7 @@ typedef struct snd_midi_fm {
   int event_head;
   int event_count;
   int voice_limit;
+  int16_t output_gain; /* 8.8 pre-sum gain; 256 = unity */
   unsigned long next_serial;
   unsigned long midi_notes_started;
   unsigned long fm_voices_started;
@@ -149,11 +158,13 @@ extern const snd_fm_instrument_t snd_fm_default_instrument;
 extern const snd_fm_instrument_t snd_fm_default_percussion_instrument;
 
 void snd_midi_fm_init(snd_midi_fm_t SND_PTR *fm);
-/* Reset playback/channel/queue state while preserving the bank and voice limit. */
+/* Reset playback/channel/queue state while preserving bank, voice limit and
+ * output gain. */
 void snd_midi_fm_reset(snd_midi_fm_t SND_PTR *fm);
 void snd_midi_fm_set_bank(snd_midi_fm_t SND_PTR *fm,
                           const snd_midi_fm_bank_t SND_PTR *bank);
 void snd_midi_fm_set_voice_limit(snd_midi_fm_t SND_PTR *fm, int voices);
+void snd_midi_fm_set_output_gain(snd_midi_fm_t SND_PTR *fm, int16_t gain_8_8);
 
 /* Install this synth as snd_midi's sink.  snd_midi currently owns one sink;
  * callers that need fan-out can invoke snd_midi_fm_midi_emit() themselves. */

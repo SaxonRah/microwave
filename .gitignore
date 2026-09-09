@@ -25,3 +25,4 @@ __pycache__/
 # rendered audio from the headless frontend
 *.wav.out
 demo.wav
+*.wav
