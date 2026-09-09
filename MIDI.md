@@ -37,7 +37,8 @@ Those are different jobs and should stay different jobs.
           +------------------------+------------------------+
           |                        |                        |
           v                        v                        v
-   future OPL backend      future sample synth       hardware MIDI out
+      snd_midi_fm          future sample synth       hardware MIDI out
+   OPL-shaped 2-op FM              |
           |                        |
           +------------+-----------+
                        |
@@ -61,10 +62,11 @@ Likewise, `snd_midi` should not know what a WAD is.
 
 ## Deliberately deferred
 
-`snd_mus` now implements the first source adapter as a zero-allocation reader over caller-owned MUS bytes; see `MUS.md`. The remaining milestones stay separate:
+`snd_mus` now implements the first source adapter and `snd_midi_fm` provides the first software synthesis backend; see `MUS.md` and `FM.md`. The remaining milestones stay separate:
 
-1. **A real synthesis backend** -- probably OPL-compatible first for Doom, with the MIDI core making a later sample/wavetable backend possible without changing MUS parsing.
-2. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
-3. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
+1. **DMX/GENMIDI patch-bank adapter** -- translate Doom-family OPL instrument data into the generic layered FM bank without putting WAD knowledge in the synth.
+2. **Register-accurate OPL backend** -- optional later work if exact YM3812/YMF262 behavior is worth the additional code; `snd_midi_fm` intentionally does not claim that accuracy.
+3. **Standard MIDI File (`.mid`) adapter** -- only if MicroConsole actually needs arbitrary SMF playback.
+4. **Tracker formats** -- only as independent adapters if a game needs them. MOD/XM/S3M/IT are not "more MIDI" and should not be pulled into the MIDI layer.
 
 That keeps the undertaking finite: one source format and one renderer can be added at a time around a stable event boundary.

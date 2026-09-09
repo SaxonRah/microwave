@@ -9,6 +9,7 @@ option(MW_SND_U8 "Build the standalone mixer in legacy 8-bit sample mode" OFF)
 option(MW_BUILD_SEQUENCER "Also build the optional pattern sequencer layer" OFF)
 option(MW_BUILD_MIDI "Also build the optional MIDI message/state layer" OFF)
 option(MW_BUILD_MUS "Also build the optional MUS source adapter" OFF)
+option(MW_BUILD_MIDI_FM "Also build the optional two-operator MIDI FM backend" OFF)
 option(MW_BUILD_PACK "Also build the pack reader (needs stdio)" OFF)
 
 # This is the actual mixer. It deliberately contains no clock, no device, no
@@ -52,7 +53,7 @@ endif()
 # MIDI is a protocol/state layer, not a song parser and not a synthesizer.
 # It deliberately has no dependency on microwave_snd so the same decoder can
 # feed a software synth, OPL backend, or hardware MIDI transport.
-if(MW_BUILD_MIDI OR MW_BUILD_MUS)
+if(MW_BUILD_MIDI OR MW_BUILD_MUS OR MW_BUILD_MIDI_FM)
     add_library(microwave_midi STATIC src/snd_midi.c)
     add_library(microwave::midi ALIAS microwave_midi)
     target_include_directories(microwave_midi PUBLIC "${CMAKE_CURRENT_LIST_DIR}/src")
@@ -74,6 +75,20 @@ if(MW_BUILD_MUS)
         target_compile_options(microwave_mus PRIVATE /W4)
     else()
         target_compile_options(microwave_mus PRIVATE ${MW_WARNINGS_GNU})
+    endif()
+endif()
+
+# OPL-shaped two-operator software FM. This is a MIDI sink and sample generator,
+# not a source-format parser and not a register-accurate YM3812 emulator.
+if(MW_BUILD_MIDI_FM)
+    add_library(microwave_midi_fm STATIC src/snd_midi_fm.c)
+    add_library(microwave::midi_fm ALIAS microwave_midi_fm)
+    target_include_directories(microwave_midi_fm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/src")
+    target_link_libraries(microwave_midi_fm PUBLIC microwave_snd microwave_midi)
+    if(MSVC)
+        target_compile_options(microwave_midi_fm PRIVATE /W4)
+    else()
+        target_compile_options(microwave_midi_fm PRIVATE ${MW_WARNINGS_GNU})
     endif()
 endif()
 

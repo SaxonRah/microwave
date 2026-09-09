@@ -91,10 +91,14 @@ add_library(microwave_mus STATIC "${MW_SHARED_SRC}/snd_mus.c")
 target_include_directories(microwave_mus PUBLIC "${MW_SHARED_SRC}")
 target_link_libraries(microwave_mus PUBLIC microwave_midi)
 
+add_library(microwave_midi_fm STATIC "${MW_SHARED_SRC}/snd_midi_fm.c")
+target_include_directories(microwave_midi_fm PUBLIC "${MW_SHARED_SRC}")
+target_link_libraries(microwave_midi_fm PUBLIC microwave_snd microwave_midi)
+
 add_library(microwave_pack STATIC "${MW_SHARED_SRC}/snd_pack.c")
 target_link_libraries(microwave_pack PUBLIC microwave_snd)
 
-foreach(target microwave_snd microwave_seq microwave_midi microwave_mus microwave_pack)
+foreach(target microwave_snd microwave_seq microwave_midi microwave_mus microwave_midi_fm microwave_pack)
     target_include_directories(${target} PUBLIC "${MW_SHARED_SRC}")
     # Instrument the libraries themselves, not only the test executables.
     # Otherwise the CI job name overstates its coverage.
@@ -156,6 +160,16 @@ if(NOT MSVC)
     target_compile_options(mw_test_mus PRIVATE -Wall -Wextra)
 endif()
 
+add_executable(mw_test_midi_fm mw_test_midi_fm.c)
+target_include_directories(mw_test_midi_fm PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${MW_SHARED_SRC}")
+target_link_libraries(mw_test_midi_fm PRIVATE
+    microwave_midi_fm microwave_mus mw_sanitizers)
+if(NOT MSVC)
+    target_compile_options(mw_test_midi_fm PRIVATE -Wall -Wextra)
+endif()
+
 # The benchmark measures the mixer, so it is always built optimised and never
 # linked against sanitizers, whatever the build type is.
 add_executable(mw_test_bench mw_test_bench.c)
@@ -175,6 +189,9 @@ set_tests_properties(midi PROPERTIES TIMEOUT 30 LABELS "midi")
 
 add_test(NAME mus COMMAND mw_test_mus)
 set_tests_properties(mus PROPERTIES TIMEOUT 30 LABELS "mus")
+
+add_test(NAME midi_fm COMMAND mw_test_midi_fm)
+set_tests_properties(midi_fm PROPERTIES TIMEOUT 30 LABELS "midi_fm")
 
 # Several seeds, so a regression that only shows up for particular geometry has
 # somewhere to surface. Each is deterministic and reproducible from its seed.
