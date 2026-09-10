@@ -26,3 +26,8 @@ __pycache__/
 *.wav.out
 demo.wav
 *.wav
+
+# local OPL integration / installer working trees
+.mw-backup-opl-*/
+_dmx19/
+_opl-backend/
