@@ -13,7 +13,7 @@ extern "C" {
  * on screen without loading anything. This is the same idea for audio: a
  * handful of oscillators and an envelope, driven straight into the mix block
  * from a ROM table, so any frontend can make a noise before the asset pipeline
- * exists. The stress test and the HUD "tick" both use it.
+ * exists.
  *
  * A snd_tone_t is deliberately not a snd_voice_t. A voice reads a clip; a tone
  * has no source data at all, exactly as gfx_draw_text5x7() writes pixels
@@ -26,7 +26,16 @@ typedef enum snd_wave {
   SND_WAVE_TRIANGLE = 2,
   SND_WAVE_SINE = 3,
   SND_WAVE_NOISE = 4,
-  SND_WAVE_COUNT = 5
+
+  /* YM3812/OPL2 wave-select shapes. Keep these separate from the generic
+   * oscillator shapes: OPL waveform numbers 1..3 are not triangle/square/saw.
+   * Existing generic waveform numeric values above are intentionally stable. */
+  SND_WAVE_OPL_SINE = 5,
+  SND_WAVE_OPL_HALF_SINE = 6,
+  SND_WAVE_OPL_ABS_SINE = 7,
+  SND_WAVE_OPL_QUARTER_SINE = 8,
+
+  SND_WAVE_COUNT = 9
 } snd_wave_t;
 
 /* ADSR in 8.8 gain and whole output frames. Kept integer end to end so the
@@ -55,13 +64,14 @@ typedef struct snd_tone {
 /* 256-entry full-cycle sine, the audio counterpart of the font glyph table. */
 extern const int16_t snd_sine_table[256];
 
-/* Raw oscillator sample for a 16.16 phase in [0,1). Exposed so an offline
-   tool can bake the same waveform a runtime tone would have produced. */
+/* Raw oscillator sample for a phase in [0,1). Exposed so an offline tool can
+   bake the same waveform a runtime tone would have produced. */
 int snd_wave_sample(snd_wave_t wave, snd_fixed_t phase, uint32_t SND_PTR *lfsr);
 
 void snd_env_init(snd_env_t SND_PTR *e, long attack, long decay,
                   int16_t sustain, long release);
-/* Envelope level in 8.8 at `frame` frames after the note started. */
+/* Envelope level in 8.8. If release is active it starts from the actual level
+   reached at key-off, including a key-off during attack or decay. */
 int16_t snd_env_level(const snd_env_t SND_PTR *e, long since_start,
                       long since_release);
 

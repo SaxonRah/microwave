@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 rem Host-only MicroWave utility runner. Invoked through mw.bat.
 rem
 rem This file intentionally uses no GOTO labels or CALL :subroutines. The host

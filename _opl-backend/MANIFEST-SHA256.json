@@ -1,0 +1,52 @@
+[
+  {
+    "path": "README-FIRST.md",
+    "bytes": 1035,
+    "sha256": "b1f2003b497ecb98a80d13c981c1d425e6b2ffa0d416b85ca466c11d66833486"
+  },
+  {
+    "path": "docs/OPL_BACKEND_RESEARCH.md",
+    "bytes": 6192,
+    "sha256": "e307b61910c6706dc10080abff99b770b302d010f07e3c1ec8a41d03319df0fe"
+  },
+  {
+    "path": "install-microwave-opl-backend.ps1",
+    "bytes": 1721,
+    "sha256": "8ee796d16c31939176290c6d9ee82f874a667fedfb033c3d29811d874d930a84"
+  },
+  {
+    "path": "scripts/mw_tool.bat",
+    "bytes": 6893,
+    "sha256": "cc66a94fe74b535bd45097b3472bc1fd972cd75ebec3f12840bae8453796e740"
+  },
+  {
+    "path": "scripts/mw_vendor_nuked_opl3.ps1",
+    "bytes": 3213,
+    "sha256": "d550b0474e8b2e554a89b506a0a54b0571da4dc235b2926f72302f5512773356"
+  },
+  {
+    "path": "shared/CMakeLists.txt",
+    "bytes": 6812,
+    "sha256": "574bc658e8fc87429c219d6d998960dc489d1db9aa891e9cbdf98c43c53546f7"
+  },
+  {
+    "path": "shared/src/snd_genmidi_opl.c",
+    "bytes": 26958,
+    "sha256": "57cb69a9739e7610f7e02b28f01963dc3cbf65c2cfc0c10525a1a5ce234a7ad2"
+  },
+  {
+    "path": "shared/src/snd_genmidi_opl.h",
+    "bytes": 5203,
+    "sha256": "4910bffbd5b334d99b13c0b468e231a75cb4cab03c204ec14d4700fd9d65efcd"
+  },
+  {
+    "path": "tools/CMakeLists.txt",
+    "bytes": 1317,
+    "sha256": "e2e98683dc0806fe11d48284fc41dafae2310c9d1546cab04270e045cecc066d"
+  },
+  {
+    "path": "tools/mw_opl_wav.c",
+    "bytes": 19819,
+    "sha256": "128b3d65e0692aa5a9af8d60cb081f4ea5391ab3ec52d9304fec71ed71d6fb0d"
+  }
+]

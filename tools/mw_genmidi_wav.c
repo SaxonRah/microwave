@@ -30,6 +30,7 @@ typedef struct mw_args {
   int rate;
   int block;
   int voices;
+  int fm_gain;
   int loop;
   int wide_accum;
   int scan_music;
@@ -97,6 +98,8 @@ static void mw_usage(const char *exe) {
   printf("  --block N     mixer block frames, default %d\n", MW_TOOL_DEFAULT_BLOCK);
   printf("  --voices N    FM voices, default %d, max %d\n",
          MW_TOOL_DEFAULT_VOICES, SND_MIDI_FM_MAX_VOICES);
+  printf("  --fm-gain N   FM pre-sum gain, 0..256, default %d\n",
+         (int)SND_MIDI_FM_DEFAULT_OUTPUT_GAIN);
   printf("  --accum MODE  host accumulation: wide (default) or saturating\n");
   printf("  --scan-music  scan every effective D_* MUS lump for full-song peak\n");
   printf("  --no-loop     stop at the MUS end marker instead of looping\n");
@@ -130,6 +133,7 @@ static int mw_parse_args(int argc, char **argv, mw_args_t *a) {
   a->rate = MW_TOOL_DEFAULT_RATE;
   a->block = MW_TOOL_DEFAULT_BLOCK;
   a->voices = MW_TOOL_DEFAULT_VOICES;
+  a->fm_gain = (int)SND_MIDI_FM_DEFAULT_OUTPUT_GAIN;
   a->loop = 1;
   a->wide_accum = 1;
 
@@ -150,7 +154,8 @@ static int mw_parse_args(int argc, char **argv, mw_args_t *a) {
     if (!strcmp(arg, "--wad") || !strcmp(arg, "--music") ||
         !strcmp(arg, "--out") || !strcmp(arg, "--seconds") ||
         !strcmp(arg, "--rate") || !strcmp(arg, "--block") ||
-        !strcmp(arg, "--voices") || !strcmp(arg, "--accum")) {
+        !strcmp(arg, "--voices") || !strcmp(arg, "--fm-gain") ||
+        !strcmp(arg, "--accum")) {
       const char *value;
       if (i + 1 >= argc) {
         fprintf(stderr, "ERROR: %s requires a value.\n", arg);
@@ -185,6 +190,12 @@ static int mw_parse_args(int argc, char **argv, mw_args_t *a) {
                   SND_MIDI_FM_MAX_VOICES);
           return 0;
         }
+      } else if (!strcmp(arg, "--fm-gain")) {
+        if (!mw_parse_positive(value, 0, SND_GAIN_UNITY, &a->fm_gain)) {
+          fprintf(stderr, "ERROR: --fm-gain must be 0..%d.\n",
+                  SND_GAIN_UNITY);
+          return 0;
+        }
       } else if (!strcmp(arg, "--accum")) {
         if (!strcmp(value, "wide"))
           a->wide_accum = 1;
@@ -215,7 +226,9 @@ static int mw_parse_args(int argc, char **argv, mw_args_t *a) {
     }
   } else {
     if (!a->music_name || !a->out_path) {
-      fprintf(stderr, "ERROR: --music and --out are required unless --scan-music is used.\n\n");
+      fprintf(stderr,
+              "ERROR: --music and --out are required unless --scan-music "
+              "is used.\n\n");
       mw_usage(argv[0]);
       return 0;
     }
@@ -527,6 +540,7 @@ static int mw_render(const mw_args_t *a, const snd_mus_song_t *song,
 #endif
   snd_midi_init(&midi);
   snd_midi_fm_init(&fm);
+  snd_midi_fm_set_output_gain(&fm, (int16_t)a->fm_gain);
   snd_midi_fm_set_bank(&fm, snd_genmidi_midi_fm_bank(genmidi));
   snd_midi_fm_set_voice_limit(&fm, a->voices);
   snd_midi_fm_bind(&fm, &midi);
@@ -583,7 +597,6 @@ static int mw_render(const mw_args_t *a, const snd_mus_song_t *song,
       goto done;
     }
     frame += (long)mixer.block_frames;
-
   }
 
   stats->mus_loops = player.loops_completed;
@@ -625,8 +638,10 @@ static int mw_scan_music(const mw_args_t *a, const mw_wad_t *wad,
   printf("MicroWave Doom music headroom scan\n");
   printf("WAD: %s (%s, %lu lumps)\n", a->wad_path, wad->type,
          (unsigned long)wad->lump_count);
-  printf("Render: %d Hz stereo, block=%d, voices=%d, first pass, accum=%s\n\n",
-         a->rate, a->block, a->voices,
+  printf("Render: %d Hz stereo, block=%d, voices=%d, first pass, "
+         "fm-gain=%d/256 (%.2f%%), accum=%s\n\n",
+         a->rate, a->block, a->voices, a->fm_gain,
+         (100.0 * (double)a->fm_gain) / 256.0,
          a->wide_accum ? "wide" : "saturating");
   printf("%-8s %9s %10s %8s %12s %8s\n",
          "Lump", "Seconds", "Peak", "% FS", "Clip samples", "Steals");
@@ -804,7 +819,8 @@ int main(int argc, char **argv) {
   total_frames = (long)total_frames64;
   data_bytes64 = total_frames64 * MW_TOOL_CHANNELS * 2u;
   if (data_bytes64 > UINT32_MAX - 36u) {
-    fprintf(stderr, "ERROR: requested WAV exceeds RIFF/WAVE 32-bit size limit.\n");
+    fprintf(stderr,
+            "ERROR: requested WAV exceeds RIFF/WAVE 32-bit size limit.\n");
     goto done;
   }
   data_bytes = (uint32_t)data_bytes64;
@@ -840,9 +856,10 @@ int main(int argc, char **argv) {
   else
     printf("MUS first-pass duration:  unavailable\n");
   printf("Render:                   %d Hz stereo, block=%d, voices=%d, %d s, "
-         "loop=%s, accum=%s\n",
+         "loop=%s, fm-gain=%d/256 (%.2f%%), accum=%s\n",
          args.rate, args.block, args.voices, args.seconds,
-         args.loop ? "yes" : "no",
+         args.loop ? "yes" : "no", args.fm_gain,
+         (100.0 * (double)args.fm_gain) / 256.0,
          args.wide_accum ? "wide" : "saturating");
   printf("Output:                   %s\n\n", args.out_path);
 

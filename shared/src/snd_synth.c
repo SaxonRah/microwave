@@ -6,6 +6,8 @@
 
 #include "snd_synth.h"
 
+#include <stdint.h>
+
 const int16_t snd_sine_table[256] = {
          0,    804,   1608,   2410,   3212,   4011,   4808,   5602,
       6393,   7179,   7962,   8739,   9512,  10278,  11039,  11793,
@@ -69,8 +71,25 @@ int snd_note_hz(int midi_note) {
   return (int)((mhz + 500L) / 1000L);
 }
 
+static uint32_t snd_phase16(snd_fixed_t phase) {
+#if SND_FIXED_SHIFT == 16
+  return SND_FIXED_FRAC(phase) & 0xffffu;
+#else
+  return (SND_FIXED_FRAC(phase) >> 16) & 0xffffu;
+#endif
+}
+
+static int snd_sine_sample16(uint32_t phase16) {
+  int idx = (int)((phase16 >> 8) & 0xffu);
+  long v = (long)snd_sine_table[idx];
+#if SND_SAMPLE_FORMAT == SND_SAMPLE_FORMAT_U8
+  v >>= 8;
+#endif
+  return (int)v;
+}
+
 int snd_wave_sample(snd_wave_t wave, snd_fixed_t phase, uint32_t SND_PTR *lfsr) {
-  uint32_t frac = SND_FIXED_FRAC(phase);
+  uint32_t frac = snd_phase16(phase);
 
   switch (wave) {
   case SND_WAVE_SQUARE:
@@ -90,13 +109,28 @@ int snd_wave_sample(snd_wave_t wave, snd_fixed_t phase, uint32_t SND_PTR *lfsr) 
     return (int)v;
   }
 
-  case SND_WAVE_SINE: {
-    int idx = (int)(frac >> 8);
-    long v = (long)snd_sine_table[idx & 0xFF];
-#if SND_SAMPLE_FORMAT == SND_SAMPLE_FORMAT_U8
-    v >>= 8;
-#endif
-    return (int)v;
+  case SND_WAVE_SINE:
+  case SND_WAVE_OPL_SINE:
+    return snd_sine_sample16(frac);
+
+  case SND_WAVE_OPL_HALF_SINE:
+    /* OPL2 waveform 1: positive half of sine, negative half muted. */
+    return (frac < 0x8000u) ? snd_sine_sample16(frac) : 0;
+
+  case SND_WAVE_OPL_ABS_SINE: {
+    /* OPL2 waveform 2: negative half of sine is reflected positive. */
+    int v = snd_sine_sample16(frac);
+    return (v < 0) ? -v : v;
+  }
+
+  case SND_WAVE_OPL_QUARTER_SINE: {
+    /* OPL2 waveform 3: abs(sine) during quadrants 0 and 2, with quadrants
+     * 1 and 3 muted. This is the chip's characteristic pseudo-saw shape. */
+    int v;
+    if ((frac & 0x4000u) != 0u)
+      return 0;
+    v = snd_sine_sample16(frac);
+    return (v < 0) ? -v : v;
   }
 
   case SND_WAVE_NOISE: {
@@ -133,38 +167,74 @@ void snd_env_init(snd_env_t SND_PTR *e, long attack, long decay,
   e->release = (release < 0) ? 0 : release;
 }
 
-int16_t snd_env_level(const snd_env_t SND_PTR *e, long since_start,
-                      long since_release) {
-  long level;
+static int16_t snd_env_keyed_level(const snd_env_t SND_PTR *e,
+                                   long since_start) {
+  int64_t level;
 
   if (!e)
     return SND_GAIN_UNITY;
   if (since_start < 0)
     return 0;
 
-  if (since_release >= 0) {
-    /* Release ramps from wherever sustain left it down to zero. */
-    if (e->release <= 0)
-      return 0;
-    if (since_release >= e->release)
-      return 0;
-    level = ((long)e->sustain * (e->release - since_release)) / e->release;
-    return (int16_t)level;
-  }
-
   if (e->attack > 0 && since_start < e->attack) {
-    level = ((long)SND_GAIN_UNITY * since_start) / e->attack;
+    level = ((int64_t)SND_GAIN_UNITY * (int64_t)since_start) /
+            (int64_t)e->attack;
+    if (level < 0)
+      level = 0;
+    if (level > SND_GAIN_UNITY)
+      level = SND_GAIN_UNITY;
     return (int16_t)level;
   }
 
   since_start -= e->attack;
   if (e->decay > 0 && since_start < e->decay) {
-    long span = (long)SND_GAIN_UNITY - (long)e->sustain;
-    level = (long)SND_GAIN_UNITY - (span * since_start) / e->decay;
+    int64_t span = (int64_t)SND_GAIN_UNITY - (int64_t)e->sustain;
+    level = (int64_t)SND_GAIN_UNITY -
+            (span * (int64_t)since_start) / (int64_t)e->decay;
+    if (level < 0)
+      level = 0;
+    if (level > SND_GAIN_UNITY)
+      level = SND_GAIN_UNITY;
     return (int16_t)level;
   }
 
   return e->sustain;
+}
+
+int16_t snd_env_level(const snd_env_t SND_PTR *e, long since_start,
+                      long since_release) {
+  int16_t release_level;
+  int64_t remaining;
+  int64_t level;
+  long release_start;
+
+  if (!e)
+    return SND_GAIN_UNITY;
+  if (since_start < 0)
+    return 0;
+
+  if (since_release < 0)
+    return snd_env_keyed_level(e, since_start);
+
+  if (e->release <= 0 || since_release >= e->release)
+    return 0;
+
+  /* Key-off can happen during attack or decay. The old implementation always
+   * started release at e->sustain, which introduced an instantaneous amplitude
+   * jump whenever the current envelope level differed from sustain. Start the
+   * release from the level that was actually reached at key-off instead. */
+  release_start = since_start - since_release;
+  if (release_start < 0)
+    release_start = 0;
+  release_level = snd_env_keyed_level(e, release_start);
+
+  remaining = (int64_t)e->release - (int64_t)since_release;
+  level = ((int64_t)release_level * remaining) / (int64_t)e->release;
+  if (level < 0)
+    level = 0;
+  if (level > SND_GAIN_UNITY)
+    level = SND_GAIN_UNITY;
+  return (int16_t)level;
 }
 
 /* ------------------------------------------------------------------ */

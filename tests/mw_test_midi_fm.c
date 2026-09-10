@@ -191,8 +191,10 @@ static void test_defaults_and_binding(void) {
   snd_midi_fm_bind(&fm, &midi);
 
   CHECK(fm.voice_limit == 9, "FM defaults to OPL2-shaped nine-voice polyphony");
+  CHECK(SND_MIDI_FM_DEFAULT_OUTPUT_GAIN == 40,
+        "FM default output gain is 40/256");
   CHECK(fm.output_gain == SND_MIDI_FM_DEFAULT_OUTPUT_GAIN,
-        "FM defaults to 12 dB of pre-sum headroom");
+        "FM starts with the configured pre-sum headroom");
   CHECK(fm.channel[2].program == 1u, "binding inherits existing MIDI program");
   CHECK(fm.channel[2].volume == 73u, "binding inherits existing MIDI volume");
   CHECK(fm.bank.fallback != NULL, "a deterministic fallback patch exists");
@@ -211,6 +213,11 @@ static void test_defaults_and_binding(void) {
   snd_midi_fm_set_output_gain(&fm, 999);
   CHECK(fm.output_gain == SND_GAIN_UNITY,
         "FM output gain clamps at unity");
+
+  snd_midi_fm_set_output_gain(&fm, 37);
+  snd_midi_fm_reset(&fm);
+  CHECK(fm.output_gain == 37,
+        "FM reset preserves caller-selected output gain");
 }
 
 static void test_queue_order(void) {

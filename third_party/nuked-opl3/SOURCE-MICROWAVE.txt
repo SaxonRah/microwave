@@ -1,0 +1,28 @@
+﻿Nuked OPL3 source used by MicroWave's optional register-native OPL backend.
+
+Source project:
+  Chocolate Doom
+  https://github.com/chocolate-doom/chocolate-doom
+
+Pinned revision:
+  895f581c5d91497bdda0516612da803fe5843e28
+
+Pinned files:
+  opl/opl3.c
+  opl/opl3.h
+
+Upstream core:
+  Nuked OPL3 by Nuke.YKT
+  https://github.com/nukeykt/Nuked-OPL3
+
+The core remains licensed under GNU LGPL version 2.1 or later.
+MicroWave builds it as a separate static-library target. The MicroWave
+GENMIDI register driver is separate source under shared/src.
+
+Build configuration:
+  OPL_WF_TABLE_RUNTIME=1
+  OPL_ENABLE_STEREOEXT=0
+
+The first option builds the waveform table at runtime and avoids requiring
+Chocolate Doom's generated wf_rom.h. The second keeps the validation backend
+on the nine-channel OPL2-compatible path.

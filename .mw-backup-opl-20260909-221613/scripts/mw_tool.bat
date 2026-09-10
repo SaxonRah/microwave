@@ -36,8 +36,6 @@ if not defined WHAT (
     echo   --rate N         output rate, default 22050
     echo   --block N        mixer block size, default 256
     echo   --gain N         OPL output gain, 0..256, default 256
-    echo   --freq-split N   284 default, or 283 DMX side-bug A/B
-    echo   --trace FILE     write ordered OPL register calls as CSV
     echo   --accum MODE     wide or saturating
     echo   --no-loop        stop MUS at its first end marker
     exit /b 0

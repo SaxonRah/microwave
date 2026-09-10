@@ -32,12 +32,16 @@ extern "C" {
 #define SND_MIDI_FM_QUEUE_EVENTS 128
 #endif
 
-/* Leave deliberate room for several independent FM voices to add together.
- * A single operator can approach full scale, so unity per voice clips normal
- * polyphony long before the mixer itself is doing anything wrong. 1/4 is
- * 12 dB of pre-sum headroom. Callers can override it per synth. */
+/* Leave deliberate room for independent FM voices to add together before the
+ * mixer clamp. Stock Doom's full soundtrack measured 47552 / 32768 at the
+ * provisional 64/256 gain, and D_INTER measured 119761 / 32768 at 160/256.
+ * Those gain-aware measurements put a 40/256 default near 90..91% full scale
+ * on the observed worst case while leaving useful margin for rounding, other
+ * WADs and small synthesis changes.
+ *
+ * Callers can override this per synth. */
 #ifndef SND_MIDI_FM_DEFAULT_OUTPUT_GAIN
-#define SND_MIDI_FM_DEFAULT_OUTPUT_GAIN (SND_GAIN_UNITY / 4)
+#define SND_MIDI_FM_DEFAULT_OUTPUT_GAIN (SND_GAIN_UNITY * 5 / 32)
 #endif
 
 #define SND_FM_FIXED_NOTE_NONE 0xFFu
