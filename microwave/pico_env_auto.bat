@@ -8,21 +8,14 @@ setlocal EnableExtensions
 rem SDK path. Preserve an explicit override.
 if not "%PICO_SDK_PATH%"=="" goto have_sdk
 
-if exist "%USERPROFILE%\.pico-sdk\sdk\2.2.0\pico_sdk_init.cmake" (
-    set "PICO_SDK_PATH=%USERPROFILE%\.pico-sdk\sdk\2.2.0"
-    goto have_sdk
-)
-if exist "%USERPROFILE%\.pico-sdk\sdk\2.1.1\pico_sdk_init.cmake" (
-    set "PICO_SDK_PATH=%USERPROFILE%\.pico-sdk\sdk\2.1.1"
-    goto have_sdk
-)
-if exist "%USERPROFILE%\.pico-sdk\sdk\2.1.0\pico_sdk_init.cmake" (
-    set "PICO_SDK_PATH=%USERPROFILE%\.pico-sdk\sdk\2.1.0"
+if exist "%USERPROFILE%\.pico-sdk\sdk\2.3.0\pico_sdk_init.cmake" (
+    set "PICO_SDK_PATH=%USERPROFILE%\.pico-sdk\sdk\2.3.0"
     goto have_sdk
 )
 
-echo ERROR: PICO_SDK_PATH is not set and no Pico SDK was found under:
-echo   %USERPROFILE%\.pico-sdk\sdk
+echo ERROR: Pico SDK 2.3.0 is required and was not found under:
+echo   %USERPROFILE%\.pico-sdk\sdk\2.3.0
+echo Or set PICO_SDK_PATH explicitly to a Pico SDK 2.3.0 checkout.
 exit /b 1
 
 :have_sdk
@@ -56,11 +49,6 @@ if not errorlevel 1 (
 )
 
 echo ERROR: arm-none-eabi-gcc was not found.
-echo Checked:
-echo   %USERPROFILE%\.pico-sdk\toolchain\14_2_Rel1\bin\arm-none-eabi-gcc.exe
-echo   %USERPROFILE%\.pico-sdk\toolchain\13_3_Rel1\bin\arm-none-eabi-gcc.exe
-echo.
-echo Or set PICO_TOOLCHAIN_PATH explicitly.
 exit /b 1
 
 :have_toolchain
@@ -94,7 +82,6 @@ if not exist "%NINJA_EXE%" (
     exit /b 1
 )
 
-rem Match the MicroRender board default; preserve a caller override.
 if "%PICO_BOARD%"=="" set "PICO_BOARD=pimoroni_pico_plus2_rp2350"
 
 echo PICO_SDK_PATH=%PICO_SDK_PATH%

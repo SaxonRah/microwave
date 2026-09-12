@@ -48,7 +48,7 @@
 #define MW_I2S_PIN_LRCLK 11
 #endif
 #ifndef MW_I2S_PIN_DATA
-#define MW_I2S_PIN_DATA 12
+#define MW_I2S_PIN_DATA 20
 #endif
 #ifndef MW_I2S_PIO
 #define MW_I2S_PIO 0
@@ -87,6 +87,11 @@ static uint g_sm = MW_I2S_SM;
 static int g_dma_chan = MW_I2S_DMA;
 static mw_demo_t g_demo;
 
+/* The serial command handler adjusts volume, so it needs the mixer. It is a
+   pointer rather than a copy because mw_drain_wait() runs between blocks, and
+   a volume set there must land on the mixer the render loop is using. */
+static snd_mixer_t *g_mixer = NULL;
+
 static const char *mw_device_name(void) {
 #if MW_PICO_DEVICE == 1
   return "MAX98357A";
@@ -98,11 +103,6 @@ static const char *mw_device_name(void) {
   return "UNKNOWN";
 #endif
 }
-
-/* The serial command handler adjusts volume, so it needs the mixer. It is a
-   pointer rather than a copy because mw_drain_wait() runs between blocks, and
-   a volume set there must land on the mixer the render loop is using. */
-static snd_mixer_t *g_mixer = NULL;
 
 #if MW_PICO_SERIAL
 static char g_cmd[32];
@@ -139,13 +139,11 @@ static void mw_service_stdio(void) {
           printf("MWPICO1 device=%s rate=%d bclk=%d lrclk=%d data=%d vol=%d\n",
                  mw_device_name(), MW_PICO_RATE, MW_I2S_PIN_BCLK,
                  MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA,
-                 snd_vol_to_percent(snd_master_volume(g_mixer)));
+                 g_mixer ? snd_vol_to_percent(snd_master_volume(g_mixer)) : 100);
           fflush(stdout);
         } else {
-          /* Volume is the one control this board has, since there are no
-             buttons wired. It is serviced from mw_drain_wait(), so it takes
-             effect on the next block rather than at the end of the song --
-             about 6 ms at the default block size. */
+          /* Volume is serviced from mw_drain_wait(), so it takes effect on the
+             next block rather than asynchronously inside a DMA/Core-1 path. */
           int v = mw_parse_vol(g_cmd);
           if (v >= 0 && g_mixer) {
             snd_set_master_volume(g_mixer, snd_vol_from_percent(v));
@@ -200,8 +198,7 @@ static void audio_hw_init(void) {
 
   /* The PIO program executes 64 instructions per stereo frame: two PIO
      instructions for each of 32 transmitted bits. The SDK divider register is
-     16.8 fixed point, so divider*256 = clk_sys*4/sample_rate. This is the same
-     calculation used by Raspberry Pi's pico_audio_i2s backend. */
+     16.8 fixed point, so divider*256 = clk_sys*4/sample_rate. */
   sys_hz = clock_get_hz(clk_sys);
   div256 = (uint32_t)((((uint64_t)sys_hz * 4u) + MW_PICO_RATE / 2u) /
                       (uint32_t)MW_PICO_RATE);
@@ -263,20 +260,20 @@ int main(void) {
   snd_mixer_t mixer;
 
   audio_hw_init();
+
 #if MW_PICO_SERIAL
   stdio_init_all();
   printf("MicroWave Pico I2S: %s, %d Hz, BCLK GP%d, LRCLK GP%d, DATA GP%d\n",
          mw_device_name(), MW_PICO_RATE, MW_I2S_PIN_BCLK,
          MW_I2S_PIN_LRCLK, MW_I2S_PIN_DATA);
   printf("MWPICO1 ready\n");
+  fflush(stdout);
 #endif
 
   snd_init(&mixer, MW_PICO_RATE, 1, g_block_a, MW_PICO_BLOCK, NULL, NULL);
   snd_set_async_drain(&mixer, mw_drain_begin, mw_drain_wait);
   g_mixer = &mixer;
-  /* Ramped, because a VOL command arriving between two blocks would otherwise
-     be a step discontinuity straight into the DAC. 512 frames is about 23 ms
-     at 22050 Hz. */
+
   snd_set_master_volume_now(&mixer, SND_VOL_UNITY);
   snd_set_volume_ramp(&mixer, 512);
 

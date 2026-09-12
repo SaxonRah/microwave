@@ -44,9 +44,10 @@ should be able to read `snd.c` without a map.
 
 There is one logical mix format — signed 16-bit at 22050 Hz — and it is
 converted only in the drain callback. DOS calls `snd_pack_u8()` to get the
-bytes a Sound Blaster wants; the Pico does the same for PWM; Raylib calls
-`snd_pack_float()`. That is exactly where and why MicroRender quantizes RGB565
-to a VGA palette during presentation, and nowhere else.
+bytes a Sound Blaster wants; the Pico presentation layer packs S16 into I2S
+words; Raylib calls `snd_pack_float()`. That is exactly where and why
+MicroRender quantizes RGB565 to a VGA palette during presentation, and nowhere
+else.
 
 ## Standalone or combined
 
@@ -155,16 +156,23 @@ a WAV with no audio device, which is what CI runs.
 
 ### RP2350
 
-The target the pipelined path exists for. Install an async drain and one call
-overlaps every DMA transfer with the mix of the next block:
+The standalone Pico frontend uses the reusable transport in
+`shared/rp2350/mw_pico_i2s_stream.*`:
 
-```c
-snd_set_async_drain(&mixer, mw_drain_begin, mw_drain_wait);
-snd_render_blocked_pipelined(&mixer, second_block, frames,
-                             mw_demo_mix, &demo, SND_RENDER_SKIP_SILENT);
+```text
+Core 0 -> control mailbox -> Core 1 producer -> queued DMA ring -> PIO I2S
 ```
 
-No audio thread, no ring buffer, no lock.
+Core 1 owns production. By default it renders 256-frame mixer chunks into
+512-frame transport periods, keeps two periods ready in a four-period ring,
+and uses a dedicated 8 KiB stack. The DMA IRQ only retires and starts buffers;
+it never synthesizes. An underrun emits silence instead of replaying stale
+audio.
+
+The same transport also provides a synchronous control mailbox for running
+state transitions on the audio-owning core at a complete producer-block
+boundary. See `PICO_AUDIO.md` for the API, diagnostics, device presets, and
+build-time ring settings.
 
 ### DOS
 
@@ -172,22 +180,40 @@ No audio thread, no ring buffer, no lock.
 entire target-specific transformation; `SND_RENDER_SKIP_SILENT` turns a silent
 block into a `memset`, which on a 386 is worth having.
 
+## Doom / DMX adapters
+
+MicroWave also has optional, allocation-free compatibility adapters for the
+classic Doom DMX sound path:
+
+- `snd_dmx_sfx` decodes caller-owned type-3 DMX sound bytes into an
+  `snd_clip_t` without knowing anything about WAD lookup or cache lifetime;
+- `snd_dmx_mix` optionally reproduces the historical `volume >> 2` quantized
+  gain and Doom-style 0..254 stereo separation law.
+
+These follow the same boundary as MUS and GENMIDI: the game locates bytes;
+MicroWave understands the audio format. See `DMX.md`.
+
 ## Repository layout
 
 ```
-shared/src/          the library
+shared/src/          portable library
   snd_config.h       build-time knobs and target detection
   snd_sample.h       sample format selection (S16 default, U8 legacy)
   snd_fixed.h        16.16 phase accumulator
   snd.h  snd.c       the mixer: blocks, spans, voices, clips, ADPCM, banks
   snd_synth.h/.c     oscillators and envelopes, no assets required
   snd_seq.h/.c       pattern sequencer, rows scheduled on absolute frames
+  snd_dmx_sfx.h/.c   Doom/DMX type-3 PCM byte adapter
+  snd_dmx_mix.h/.c   optional historical DMX gain/pan helpers
   snd_pack.h/.c      MWP1 and MRP1 pack reader
   mw_music_demo.h/.c the deterministic demo every frontend plays
+shared/rp2350/       reusable RP2350 Core-1 + DMA-ring I2S transport
+  mw_pico_i2s_stream.h/.c
+  mw_i2s.pio
 shared/tools/
   mw_pack.py         asset packer, WAV in, MWP1 out, ADPCM encoder
 tests/               unit, fuzz and benchmark harnesses + CMake presets
-microwave/           RP2350 frontend
+microwave/           RP2350 standalone frontend
 microwave_dos/       DOS Sound Blaster frontend
 microwave_raylib/    desktop frontend (and the headless build CI uses)
 scripts/             build, run and clean dispatchers; mw_tools.bat locates toolchains
@@ -196,7 +222,7 @@ mw.bat               single entry point, sibling of MicroRender's mr.bat
 
 ## Layering
 
-Three targets, deliberately separate:
+The base mixer and optional adapters remain deliberately separate:
 
 - `microwave::snd` — `snd.c` + `snd_synth.c`. No stdio, no malloc, no clock, no
   song. CI asserts this by checking the archive's undefined symbols.
@@ -204,6 +230,13 @@ Three targets, deliberately separate:
   accepting a tracker's idea of what a song is.
 - `microwave::pack` — the pack reader. Needs stdio, which a bare-metal build
   may not want.
+- `microwave::dmx_sfx` — caller-owned Doom/DMX type-3 bytes to `snd_clip_t`.
+- `microwave::dmx_mix` — optional historical Doom/DMX gain/pan compatibility.
+
+The RP2350 I2S transport is target infrastructure rather than part of the
+portable `shared` CMake library; a Pico firmware compiles
+`shared/rp2350/mw_pico_i2s_stream.c` and generates the PIO header from the
+canonical `shared/rp2350/mw_i2s.pio`.
 
 ## Known constraints
 
@@ -231,11 +264,12 @@ These are real limits, chosen deliberately, not oversights.
 - **`snd_clip_validate()` is not optional.** The mix loops do not re-check
   bounds per block, by design. Anything decoded from a pack or any other
   untrusted source must go through it once after loading. `snd_pack_load_clip()`
-  does this for you.
-- **The DOS and Pico frontends are not covered by CI**, because CI has no Sound
-  Blaster and no silicon. The mixer they call is covered exhaustively. Both
-  files say so in their own header comments, and both are kept small
-  specifically so the untested part stays legible.
+  does this for you, and `snd_dmx_sfx_load()` validates its decoded clip before
+  returning it.
+- **The DOS and Pico hardware frontends are not covered by CI**, because CI has
+  no Sound Blaster and no silicon. The portable mixer and DMX adapters are host
+  tested. The Pico transport exposes refill/underrun/ring/stack diagnostics so
+  timing behavior can be measured on the hardware that matters.
 
 ## Benchmark
 

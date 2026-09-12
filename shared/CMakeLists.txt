@@ -13,6 +13,8 @@ option(MW_BUILD_MIDI_FM "Also build the optional two-operator MIDI FM backend" O
 option(MW_BUILD_GENMIDI "Also build the optional generic GENMIDI adapter" OFF)
 option(MW_BUILD_GENMIDI_OPL
     "Build the register-native GENMIDI + Nuked OPL backend" OFF)
+option(MW_BUILD_DMX_SFX "Also build the Doom/DMX type-3 SFX adapter" OFF)
+option(MW_BUILD_DMX_MIX "Also build optional Doom/DMX gain/pan helpers" OFF)
 option(MW_BUILD_PACK "Also build the pack reader (needs stdio)" OFF)
 
 # This is the actual mixer. It deliberately contains no clock, no device, no
@@ -161,6 +163,35 @@ if(MW_BUILD_GENMIDI_OPL)
     else()
         target_compile_options(microwave_genmidi_opl PRIVATE
             ${MW_WARNINGS_GNU})
+    endif()
+endif()
+
+# Generic Doom/DMX type-3 PCM adapter. The caller supplies the lump bytes and
+# owns their lifetime; this layer deliberately contains no WAD API or I/O.
+if(MW_BUILD_DMX_SFX)
+    add_library(microwave_dmx_sfx STATIC src/snd_dmx_sfx.c)
+    add_library(microwave::dmx_sfx ALIAS microwave_dmx_sfx)
+    target_include_directories(microwave_dmx_sfx PUBLIC
+        "${CMAKE_CURRENT_LIST_DIR}/src")
+    target_link_libraries(microwave_dmx_sfx PUBLIC microwave_snd)
+    if(MSVC)
+        target_compile_options(microwave_dmx_sfx PRIVATE /W4)
+    else()
+        target_compile_options(microwave_dmx_sfx PRIVATE ${MW_WARNINGS_GNU})
+    endif()
+endif()
+
+# Historical DMX/Multivoc quantized gain/pan helpers are optional and separate
+# from the byte decoder so applications can use either boundary independently.
+if(MW_BUILD_DMX_MIX)
+    add_library(microwave_dmx_mix STATIC src/snd_dmx_mix.c)
+    add_library(microwave::dmx_mix ALIAS microwave_dmx_mix)
+    target_include_directories(microwave_dmx_mix PUBLIC
+        "${CMAKE_CURRENT_LIST_DIR}/src")
+    if(MSVC)
+        target_compile_options(microwave_dmx_mix PRIVATE /W4)
+    else()
+        target_compile_options(microwave_dmx_mix PRIVATE ${MW_WARNINGS_GNU})
     endif()
 endif()
 

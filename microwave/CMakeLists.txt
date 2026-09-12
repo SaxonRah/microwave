@@ -4,9 +4,9 @@ if(WIN32)
 else()
     set(USERHOME $ENV{HOME})
 endif()
-set(sdkVersion 2.2.0)
+set(sdkVersion 2.3.0)
 set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.2.0-a4)
+set(picotoolVersion 2.3.0)
 set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
 if(EXISTS ${picoVscode})
     include(${picoVscode})
@@ -26,10 +26,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-# ---------------------------------------------------------------------------
-# Pico audio configuration
-# ---------------------------------------------------------------------------
-
 set(MW_PICO_DEVICE "MAX98357A" CACHE STRING
     "I2S sink: MAX98357A, PCM5102A, or NS4168")
 set_property(CACHE MW_PICO_DEVICE PROPERTY STRINGS MAX98357A PCM5102A NS4168)
@@ -46,9 +42,6 @@ else()
         "MW_PICO_DEVICE must be MAX98357A, PCM5102A, or NS4168; got '${MW_PICO_DEVICE}'")
 endif()
 
-# 32 kHz is the common default for all three devices. In particular it is a
-# documented 3-wire/BCK-PLL operating point for PCM5102A with 16-bit stereo
-# slots (32 BCLKs per LRCLK), unlike MicroWave's historical 22050 Hz PWM rate.
 set(MW_PICO_RATE 32000 CACHE STRING "I2S sample rate in Hz")
 set(MW_PICO_BLOCK 256 CACHE STRING "Mixer frames per DMA block")
 set(MW_PICO_SYS_KHZ 0 CACHE STRING
@@ -57,7 +50,7 @@ option(MW_PICO_SERIAL "Enable USB serial status/PING service" ON)
 
 set(MW_I2S_PIN_BCLK 10 CACHE STRING "I2S BCLK GPIO")
 set(MW_I2S_PIN_LRCLK 11 CACHE STRING "I2S LRCLK GPIO; must equal BCLK + 1")
-set(MW_I2S_PIN_DATA 12 CACHE STRING "I2S DATA/DIN/SDATA GPIO")
+set(MW_I2S_PIN_DATA 20 CACHE STRING "I2S DATA/DIN/SDATA GPIO; GP12 is reserved for MicroConsole SD MISO")
 set(MW_I2S_PIO 0 CACHE STRING "PIO block: 0 or 1")
 set(MW_I2S_SM 0 CACHE STRING "PIO state machine: 0..3")
 set(MW_I2S_DMA 0 CACHE STRING "DMA channel")
@@ -87,9 +80,6 @@ if(MW_I2S_SM GREATER 3)
 endif()
 
 if(MW_PICO_DEVICE_ID EQUAL 2)
-    # PCM5102A's 3-wire mode synthesizes SCK from BCK. With the 16-bit stereo
-    # transport below (32 BCLKs/LRCLK), keep overrides to documented BCK-PLL
-    # sample-rate points rather than accepting a value that may never lock.
     if(NOT MW_PICO_RATE EQUAL 32000 AND
        NOT MW_PICO_RATE EQUAL 44100 AND
        NOT MW_PICO_RATE EQUAL 48000 AND
@@ -120,8 +110,6 @@ pico_generate_pio_header(microwave
 target_include_directories(microwave PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../shared/src")
 
-# snd_pack.c is deliberately absent: it needs stdio/filesystem services, while
-# this firmware exercises the same synthesized demo as DOS and desktop.
 target_link_libraries(microwave
     pico_stdlib
     hardware_clocks
