@@ -97,6 +97,14 @@
 #include <string.h>
 #include "opl3.h"
 
+#if defined(MC_OPL3_TIME_CRITICAL) && (defined(__GNUC__) || defined(__clang__))
+#define OPL3_TIME_CRITICAL(name) \
+    __attribute__((noinline, section(".time_critical.opl3." #name))) name
+#else
+#define OPL3_TIME_CRITICAL(name) name
+#endif
+
+
 #if OPL_WF_TABLE_RUNTIME
 
 /* Base logsin quarter-wave table from upstream Nuked-OPL3. logsin_wf is
@@ -336,7 +344,7 @@ static void OPL3_EnvelopeUpdateRate(opl3_slot *slot)
     }
 }
 
-static void OPL3_EnvelopeCalc(opl3_slot *slot)
+static void OPL3_TIME_CRITICAL(OPL3_EnvelopeCalc)(opl3_slot *slot)
 {
     uint8_t nonzero;
     uint8_t rate_hi;
@@ -1300,12 +1308,12 @@ static inline void OPL3_ProcessSlotImpl(opl3_slot *slot, uint8_t fb, int maybe_r
 /* Out-of-line clones of OPL3_ProcessSlotImpl. Norm is for the 16 channels
  * that can never contain a rhythm-special slot (everything except channels
  * 7 and 8, which hold slots 13/16 and 14/17). */
-static void OPL3_ProcessSlotNorm(opl3_slot *slot, uint8_t fb)
+static void OPL3_TIME_CRITICAL(OPL3_ProcessSlotNorm)(opl3_slot *slot, uint8_t fb)
 {
     OPL3_ProcessSlotImpl(slot, fb, 0);
 }
 
-static void OPL3_ProcessSlotRhythm(opl3_slot *slot, uint8_t fb)
+static void OPL3_TIME_CRITICAL(OPL3_ProcessSlotRhythm)(opl3_slot *slot, uint8_t fb)
 {
     OPL3_ProcessSlotImpl(slot, fb, 1);
 }
@@ -1381,7 +1389,7 @@ static inline void OPL3_ProcessChannelSlots(opl3_channel *channel, int maybe_rhy
 
 /* Right-channel mix over the out_right pointer lists, into mixbuff[1] and
  * mixbuff[3]. */
-static void OPL3_MixRight(opl3_chip *chip)
+static void OPL3_TIME_CRITICAL(OPL3_MixRight)(opl3_chip *chip)
 {
     int32_t mix0 = 0;
     int32_t mix1 = 0;
@@ -1420,7 +1428,7 @@ static void OPL3_MixRight(opl3_chip *chip)
     chip->mixbuff[3] = mix1;
 }
 
-inline void OPL3_Generate4Ch(opl3_chip *chip, int16_t *buf4)
+void OPL3_TIME_CRITICAL(OPL3_Generate4Ch)(opl3_chip *chip, int16_t *buf4)
 {
     opl3_channel *channel;
     opl3_writebuf *writebuf;
@@ -1635,7 +1643,7 @@ void OPL3_Generate(opl3_chip *chip, int16_t *buf)
     buf[1] = samples[1];
 }
 
-void OPL3_Generate4ChResampled(opl3_chip *chip, int16_t *buf4)
+void OPL3_TIME_CRITICAL(OPL3_Generate4ChResampled)(opl3_chip *chip, int16_t *buf4)
 {
     while (chip->samplecnt >= chip->rateratio)
     {
@@ -1657,7 +1665,7 @@ void OPL3_Generate4ChResampled(opl3_chip *chip, int16_t *buf4)
     chip->samplecnt += 1 << RSM_FRAC;
 }
 
-void OPL3_GenerateResampled(opl3_chip *chip, int16_t *buf)
+void OPL3_TIME_CRITICAL(OPL3_GenerateResampled)(opl3_chip *chip, int16_t *buf)
 {
     int16_t samples[4];
     OPL3_Generate4ChResampled(chip, samples);
