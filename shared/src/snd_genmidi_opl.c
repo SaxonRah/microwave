@@ -1,5 +1,13 @@
 #include "snd_genmidi_opl.h"
 
+#if defined(MC_OPL3_TIME_CRITICAL) && (defined(__GNUC__) || defined(__clang__))
+#define MW_OPL_TIME_CRITICAL(name) \
+    __attribute__((noinline, section(".time_critical.mw_opl." #name))) name
+#else
+#define MW_OPL_TIME_CRITICAL(name) name
+#endif
+
+
 #include <limits.h>
 #include <string.h>
 
@@ -1058,8 +1066,9 @@ static void gm_apply_event(snd_genmidi_opl_t SND_PTR *opl,
   }
 }
 
-void snd_genmidi_opl_mix_block(snd_genmidi_opl_t SND_PTR *opl,
-                               snd_mixer_t SND_PTR *m) {
+void MW_OPL_TIME_CRITICAL(snd_genmidi_opl_mix_block)(
+    snd_genmidi_opl_t SND_PTR *opl,
+    snd_mixer_t SND_PTR *m) {
   long block_start;
   int frame;
 
